@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     # ---------- Storage ----------
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_MB: int = 100
+    KNOWLEDGE_SOURCE_DIR: str = "../knowledge-sources"
+    RAG_EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
+    RAG_CHUNK_SIZE: int = 150
 
     # ---------- ML ----------
     MODEL_DIR: str = "models"

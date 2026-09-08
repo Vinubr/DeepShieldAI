@@ -29,3 +29,8 @@ class KnowledgeBaseResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class KnowledgeBaseQuery(BaseModel):
+    question: str
+    top_k: int = 3

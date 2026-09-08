@@ -31,26 +31,27 @@ const EMBEDDING_MODELS = [
   "bge-small-en-v1.5",
 ];
 
-const INDEX_STATUSES = ["Pending", "Indexed", "Failed"];
-
 export default function Rag() {
   const [entries, setEntries] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [query, setQuery] = useState("");
+  const [question, setQuestion] = useState("");
+  const [results, setResults] = useState([]);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [deleting, setDeleting] = useState(null);
+  const [vectorStore, setVectorStore] = useState({ ready: false, loading: true });
 
   // Index-entry form
   const [showForm, setShowForm] = useState(false);
   const [documentId, setDocumentId] = useState("");
   const [embeddingModel, setEmbeddingModel] = useState(EMBEDDING_MODELS[0]);
-  const [chunkCount, setChunkCount] = useState(12);
-  const [indexStatus, setIndexStatus] = useState("Indexed");
+  const [chunkSize, setChunkSize] = useState(500);
   const [submitting, setSubmitting] = useState(false);
+  const [searching, setSearching] = useState(false);
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -63,8 +64,11 @@ export default function Rag() {
       setEntries(entriesRes.data);
       setDocuments(documentsRes.data);
       setDocumentId((current) => current || String(documentsRes.data[0]?.id ?? ""));
+      const vectorStoreRes = await apiClient.get("/knowledge-base/status");
+      setVectorStore({ ...vectorStoreRes.data, loading: false });
     } catch (err) {
       setError(apiError(err, "Unable to load the knowledge base."));
+      setVectorStore({ ready: false, loading: false });
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -119,16 +123,13 @@ export default function Rag() {
     setStatus("");
 
     try {
-      await apiClient.post("/knowledge-base/", {
-        document_id: Number(documentId),
-        // Until ChromaDB exists (phase 9) the vector id is a deterministic
-        // placeholder that the real ingestion pipeline will overwrite.
-        vector_id: `doc-${documentId}-${Date.now().toString(36)}`,
-        embedding_model: embeddingModel,
-        chunk_count: Number(chunkCount),
-        index_status: indexStatus,
+      await apiClient.post(`/knowledge-base/ingest/${documentId}`, null, {
+        params: {
+          embedding_model: embeddingModel,
+          chunk_size: Number(chunkSize),
+        },
       });
-      setStatus("Knowledge entry registered.");
+      setStatus("Document indexed successfully.");
       setShowForm(false);
       await load(true);
     } catch (err) {
@@ -151,13 +152,33 @@ export default function Rag() {
     }
   };
 
+  const handleQuery = async (event) => {
+    event.preventDefault();
+    if (!question.trim()) return;
+
+    setSearching(true);
+    setError("");
+    try {
+      const response = await apiClient.post("/knowledge-base/query", {
+        question: question.trim(),
+        top_k: 3,
+      });
+      setResults(response.data);
+    } catch (err) {
+      setResults([]);
+      setError(apiError(err, "Unable to search the knowledge base."));
+    } finally {
+      setSearching(false);
+    }
+  };
+
   return (
     <div className="px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
       <div className="mx-auto max-w-7xl space-y-6">
         <PageHeader
           eyebrow="Retrieval"
           title="Grounded knowledge base"
-          description="Indexed sources used to support and cite detection verdicts."
+          description="Sources are synchronized automatically from the repository knowledge folder."
           actions={
             <>
               <Button
@@ -174,7 +195,30 @@ export default function Rag() {
                 icon={Plus}
                 onClick={() => setShowForm((prev) => !prev)}
               >
-                Index a document
+                Manual index
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={RefreshCw}
+                loading={refreshing}
+                onClick={async () => {
+                  setRefreshing(true);
+                  setError("");
+                  try {
+                    const response = await apiClient.post("/knowledge-base/sync");
+                    setStatus(
+                      `Sources synchronized: ${response.data.indexed_files} indexed, ${response.data.skipped_files} unchanged.`
+                    );
+                    await load(true);
+                  } catch (err) {
+                    setError(apiError(err, "Unable to synchronize knowledge sources."));
+                  } finally {
+                    setRefreshing(false);
+                  }
+                }}
+              >
+                Sync sources
               </Button>
             </>
           }
@@ -207,10 +251,10 @@ export default function Rag() {
           />
           <StatCard
             label="Vector store"
-            value="Offline"
-            hint="ChromaDB — phase 9"
+            value={vectorStore.loading ? "Checking" : vectorStore.ready ? "Ready" : "Offline"}
+            hint={vectorStore.ready ? `${vectorStore.chunks ?? 0} stored chunks` : "ChromaDB unavailable"}
             icon={Cpu}
-            accent="caution"
+            accent={vectorStore.ready ? "clear" : "caution"}
           />
         </div>
 
@@ -253,30 +297,15 @@ export default function Rag() {
               </div>
 
               <div>
-                <Label htmlFor="chunks">Chunk count</Label>
+                <Label htmlFor="chunks">Chunk size</Label>
                 <Input
                   id="chunks"
                   type="number"
-                  min="1"
-                  max="10000"
-                  value={chunkCount}
-                  onChange={(event) => setChunkCount(event.target.value)}
+                  min="100"
+                  max="5000"
+                  value={chunkSize}
+                  onChange={(event) => setChunkSize(event.target.value)}
                 />
-              </div>
-
-              <div>
-                <Label htmlFor="status">Index status</Label>
-                <Select
-                  id="status"
-                  value={indexStatus}
-                  onChange={(event) => setIndexStatus(event.target.value)}
-                >
-                  {INDEX_STATUSES.map((value) => (
-                    <option key={value} value={value}>
-                      {value}
-                    </option>
-                  ))}
-                </Select>
               </div>
 
               <div className="md:col-span-2 xl:col-span-4">
@@ -296,27 +325,58 @@ export default function Rag() {
         <Card>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="min-w-0 flex-1">
-              <Label htmlFor="query" hint="lexical match">
-                Search the knowledge base
+              <Label htmlFor="question" hint="semantic search">
+                Ask the knowledge base
               </Label>
-              <Input
-                id="query"
-                icon={Search}
-                type="search"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="e.g. jawline artefacts, MiniLM, indexed…"
-              />
+              <form onSubmit={handleQuery} className="flex gap-2">
+                <Input
+                  id="question"
+                  icon={Search}
+                  type="search"
+                  value={question}
+                  onChange={(event) => setQuestion(event.target.value)}
+                  placeholder="e.g. Why can a real image be classified as deepfake?"
+                />
+                <Button type="submit" loading={searching} disabled={!question.trim()}>
+                  Ask
+                </Button>
+              </form>
             </div>
-            <Badge tone="warning">semantic search · phase 9</Badge>
+            <Badge tone="success">ChromaDB retrieval</Badge>
           </div>
 
-          <p className="mt-3 text-xs leading-relaxed text-slate-500">
-            This filters registered entries by substring. Embedding-based
-            retrieval with cited passages requires the ChromaDB vector store
-            and the ingestion pipeline built in phase 9 — the{" "}
-            <code className="font-mono">rag/</code> package is currently empty.
-          </p>
+          {results.length > 0 && (
+            <div className="mt-5 space-y-3">
+              <p className="hud-label text-clear-400">Retrieved sources</p>
+              {results.map((result, index) => (
+                <div key={`${result.metadata?.document_id}-${index}`} className="rounded-xl border border-line/10 bg-void-900/50 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-mono text-xs text-neon-400">
+                      {result.metadata?.source_filename ?? "Unknown source"}
+                    </p>
+                    {result.metadata?.page_number > 0 && (
+                      <Badge tone="neutral">Page {result.metadata.page_number}</Badge>
+                    )}
+                  </div>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-300">{result.text}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-5 border-t border-line/10 pt-5">
+            <Label htmlFor="query" hint="metadata only">
+              Filter indexed entries
+            </Label>
+            <Input
+              id="query"
+              icon={Search}
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Filter by filename, model, or status…"
+            />
+          </div>
         </Card>
 
         {/* Entries */}
