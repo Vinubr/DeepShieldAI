@@ -52,6 +52,25 @@ def create_bot_analysis(
         )
 
 
+@router.post(
+    "/generate/{prediction_id}",
+    response_model=BotAnalysisResponse,
+)
+def generate_bot_analysis(
+    prediction_id: int,
+    question: str | None = Query(None, description="Optional custom forensic query"),
+    service: BotAnalysisService = Depends(get_bot_analysis_service),
+):
+    """Run automated bot behavioral/artifact assessment on a prediction."""
+    try:
+        return service.generate_bot_analysis(prediction_id, question)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=404 if "not found" in str(e).lower() else 400,
+            detail=str(e),
+        )
+
+
 @router.get(
     "/",
     response_model=list[BotAnalysisResponse],

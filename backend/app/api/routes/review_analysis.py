@@ -52,6 +52,24 @@ def create_review_analysis(
         )
 
 
+@router.post(
+    "/generate/{prediction_id}",
+    response_model=ReviewAnalysisResponse,
+)
+def generate_review_analysis(
+    prediction_id: int,
+    service: ReviewAnalysisService = Depends(get_review_analysis_service),
+):
+    """Run automated forensic review analysis on a prediction."""
+    try:
+        return service.generate_review_analysis(prediction_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=404 if "not found" in str(e).lower() else 400,
+            detail=str(e),
+        )
+
+
 @router.get(
     "/",
     response_model=list[ReviewAnalysisResponse],

@@ -33,6 +33,8 @@ const LIVE_SECTIONS = [
     title: "Intelligence",
     items: [
       { label: "Explainability", to: "/explain", icon: Puzzle },
+      { label: "Review Forensics", to: "/explain?tab=review", icon: Star },
+      { label: "Bot Analysis", to: "/explain?tab=bot", icon: Bot },
       { label: "Knowledge Base", to: "/rag", icon: BookOpen },
     ],
   },
@@ -47,8 +49,6 @@ const LIVE_SECTIONS = [
  * that delivers them, rather than as links that go nowhere.
  */
 const ROADMAP = [
-  { label: "Bot Detection", icon: Bot, phase: "P10" },
-  { label: "Review Forensics", icon: Star, phase: "P10" },
   { label: "Model Registry", icon: Boxes, phase: "P5" },
   { label: "Audit Logs", icon: ScrollText, phase: "P11", adminOnly: true },
 ];

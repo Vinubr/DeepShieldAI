@@ -150,27 +150,60 @@ class ReviewDetector(BaseDetector):
 
         started = time.perf_counter()
 
-        text = load_text(file_path)
+        tokens = self._tokenizer(text, return_tensors="pt", add_special_tokens=True)
+        input_ids = tokens["input_ids"][0]
+        total_tokens = len(input_ids)
 
-        inputs = self._tokenizer(
-            text,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=self.max_length,
-        )
-        inputs = {key: value.to(self.device) for key, value in inputs.items()}
+        if total_tokens <= self.max_length:
+            inputs = self._tokenizer(
+                text,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=self.max_length,
+            )
+            inputs = {key: value.to(self.device) for key, value in inputs.items()}
 
-        with torch.no_grad():
-            logits = self._model(**inputs).logits
-            probs = torch.softmax(logits, dim=-1)[0]
+            with torch.no_grad():
+                logits = self._model(**inputs).logits
+                probs = torch.softmax(logits, dim=-1)[0]
+        else:
+            # Multi-window sliding evaluation for comprehensive review coverage
+            step = max(32, self.max_length // 2)
+            windows_ids = []
+            windows_mask = []
+            for start_idx in range(0, min(total_tokens, self.max_length * 8), step):
+                chunk_ids = input_ids[start_idx : start_idx + self.max_length]
+                if len(chunk_ids) < self.max_length:
+                    pad_len = self.max_length - len(chunk_ids)
+                    mask = torch.cat([torch.ones(len(chunk_ids), dtype=torch.long), torch.zeros(pad_len, dtype=torch.long)])
+                    chunk_ids = torch.cat([chunk_ids, torch.full((pad_len,), self._tokenizer.pad_token_id or 0, dtype=torch.long)])
+                else:
+                    mask = torch.ones(self.max_length, dtype=torch.long)
+                windows_ids.append(chunk_ids)
+                windows_mask.append(mask)
+                if start_idx + self.max_length >= total_tokens:
+                    break
+
+            batched_inputs = {
+                "input_ids": torch.stack(windows_ids).to(self.device),
+                "attention_mask": torch.stack(windows_mask).to(self.device),
+            }
+            with torch.no_grad():
+                all_logits = self._model(**batched_inputs).logits
+                all_probs = torch.softmax(all_logits, dim=-1)
+                probs = torch.mean(all_probs, dim=0)
 
         predicted_id = int(torch.argmax(probs).item())
-        label = self._id2label.get(predicted_id, str(predicted_id))
+        raw_label = self._id2label.get(predicted_id, str(predicted_id))
         confidence = float(probs[predicted_id])
 
+        # Map CG (Computer-Generated) -> "Fake", OR (Original) -> "Genuine"
+        label_map = {"CG": "Fake", "OR": "Genuine"}
+        label = label_map.get(raw_label.upper(), raw_label)
+
         probabilities = {
-            self._id2label.get(i, str(i)): round(float(p), 6)
+            label_map.get(self._id2label.get(i, str(i)).upper(), self._id2label.get(i, str(i))): round(float(p), 6)
             for i, p in enumerate(probs)
         }
 
@@ -184,6 +217,7 @@ class ReviewDetector(BaseDetector):
                 "max_length": self.max_length,
                 "device": str(self.device),
                 "characters_read": len(text),
+                "raw_label": raw_label,
             },
         )
 
