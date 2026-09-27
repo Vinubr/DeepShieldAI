@@ -44,6 +44,42 @@ class ReportService:
             report
         )
 
+    def generate_report(self, prediction_id: int) -> Report:
+        prediction = self.prediction_repository.get_prediction_by_id(prediction_id)
+        if prediction is None:
+            raise ValueError("Prediction not found.")
+
+        doc = prediction.document
+        modality = doc.document_type.type_name if doc and doc.document_type else "Media"
+        filename = doc.original_file_name if doc else f"Document #{prediction.document_id}"
+
+        title = f"Forensic Assessment Report: {filename} ({prediction.predicted_label})"
+        is_fake = prediction.predicted_label in ["Deepfake", "Fake", "CG"]
+        if is_fake:
+            action_proto = (
+                f"Protocol: Immediate quarantine of {modality.lower()} asset. "
+                f"Trigger forensic incident log and restrict automated distribution pipelines."
+            )
+        else:
+            action_proto = (
+                "Protocol: Integrity verified. Cleared for storage and standard operational processing."
+            )
+
+        summary = (
+            f"Automated forensic examination for {modality} asset '{filename}'.\n"
+            f"Model verdict: {prediction.predicted_label} (Engine: {prediction.model_name}).\n"
+            f"Risk Level: {'CRITICAL / SYNTHETIC MANIPULATION' if is_fake else 'LOW / AUTHENTIC BASELINE'}.\n"
+            f"{action_proto}"
+        )
+
+        report = Report(
+            prediction_id=prediction_id,
+            report_title=title,
+            report_summary=summary,
+            report_path=f"/reports/rep_{prediction_id}.pdf",
+        )
+        return self.report_repository.create_report(report)
+
     def get_report_by_id(
         self,
         report_id: int,
@@ -73,9 +109,13 @@ class ReportService:
             )
         )
 
-    def get_all_reports(self, skip: int = 0, limit: int = 50):
-
+    def get_all_reports(self, skip: int = 0, limit: int = 50, user_id: int | None = None):
+        if user_id is not None:
+            return self.report_repository.get_reports_by_user(user_id, skip, limit)
         return self.report_repository.get_all_reports(skip, limit)
+
+    def get_reports_by_user(self, user_id: int, skip: int = 0, limit: int = 50):
+        return self.report_repository.get_reports_by_user(user_id, skip, limit)
 
     def update_report(
         self,

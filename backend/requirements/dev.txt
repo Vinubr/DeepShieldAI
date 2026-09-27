@@ -1,6 +1,7 @@
-# Dev/test tooling. Deliberately depends on base.txt so API-only development
-# does not install the large ML stack. Use ml.txt when testing detector,
-# explainability, or RAG behavior.
+# Dev/test tooling for the current phase (Phase 4). Deliberately depends on
+# base.txt, NOT ml.txt — Phase 4 has no ML code to test yet, and pulling in
+# torch here would make plain backend development pay a multi-GB install
+# for no benefit. Switch the line below to `-r ml.txt` once Phase 5 lands.
 -r base.txt
 
 pytest==9.1.1

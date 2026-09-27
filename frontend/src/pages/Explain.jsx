@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import {
   Flame,
@@ -16,6 +16,13 @@ import {
   ShieldAlert,
   Copy,
   Check,
+  ExternalLink,
+  Download,
+  Eye,
+  Search,
+  SlidersHorizontal,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import apiClient, { apiError } from "../api/client";
 import {
@@ -27,40 +34,46 @@ import {
   Alert,
   Select,
   Label,
+  Segmented,
 } from "../components/ui";
 import { Skeleton } from "../components/ui/Skeleton";
 import { verdictOf, statusTone } from "../lib/verdict";
-import { formatDateTime, formatSeconds } from "../lib/format";
+import {
+  formatDateTime,
+  formatSeconds,
+  formatBytes,
+  fileMeta,
+  getDocumentFileUrl,
+} from "../lib/format";
 
 /**
- * The three attribution methods the project promises.
- *
- * Rendered as honest placeholders until phase 7 fills xai/gradcam.py,
- * xai/shap_explainer.py and xai/lime_explainer.py — all three are currently
- * empty files. Showing a fake heatmap here would be worse than showing none.
+ * The three attribution methods the project supports:
+ * - Grad-CAM (Image, Video, Audio CNNs)
+ * - SHAP (Text, Review tokens, Image superpixels, Video & Audio chunks)
+ * - LIME (Text, Review tokens, Image superpixels, Video & Audio chunks)
  */
 const METHODS = [
   {
     key: "gradcam",
     name: "Grad-CAM",
     icon: Flame,
-    question: "Which features/pixels/frames drove this decision?",
+    question: "Which spatial/temporal features drove this decision?",
     detail:
-      "Gradient-weighted activations from convolutional blocks: 2D spatial heatmap for Image, 3D spatio-temporal keyframe overlay for Video, and 1D temporal feature maps for Audio.",
+      "Gradient-weighted activations from convolutional blocks: 2D spatial heatmap for Image, 3D keyframe overlay for Video, and 1D temporal feature maps for Audio.",
     accent: "border-threat/25 bg-threat/10 text-threat",
     available: true,
-    modality: "Image / Video / Audio",
+    modality: "Image / Video / Audio (CNNs)",
   },
   {
     key: "shap",
     name: "SHAP",
     icon: BarChart3,
-    question: "How much did each feature/segment contribute?",
+    question: "How much did each token/segment contribute?",
     detail:
-      "Shapley additive attributions across Image superpixels, Video frame chunks, Audio segments, and Text tokens.",
+      "Shapley additive attributions across Text/Review tokens, Image superpixels, Video frame chunks, and Audio segments.",
     accent: "border-volt-500/25 bg-volt-500/10 text-volt-400",
     available: true,
-    modality: "Image / Video / Audio / Text / Review",
+    modality: "All Modalities (Text / Review / Image / Video / Audio)",
   },
   {
     key: "lime",
@@ -68,10 +81,10 @@ const METHODS = [
     icon: Boxes,
     question: "What simple model mimics this decision locally?",
     detail:
-      "Perturbs superpixels, video frame chunks, audio chunks, or tokens and fits an interpretable local surrogate model.",
+      "Perturbs tokens, superpixels, or chunks and fits an interpretable local surrogate linear model.",
     accent: "border-neon-500/25 bg-neon-500/10 text-neon-400",
     available: true,
-    modality: "Image / Video / Audio / Text / Review",
+    modality: "All Modalities (Text / Review / Image / Video / Audio)",
   },
 ];
 
@@ -82,6 +95,13 @@ export default function Explain() {
   const [bots, setBots] = useState([]);
   const [reports, setReports] = useState([]);
   const [explanations, setExplanations] = useState([]);
+
+  // Document details & extracted source text
+  const [documentData, setDocumentData] = useState(null);
+  const [sourceText, setSourceText] = useState("");
+  const [loadingDoc, setLoadingDoc] = useState(false);
+  const [copiedSource, setCopiedSource] = useState(false);
+  const [showFullSource, setShowFullSource] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -115,6 +135,44 @@ export default function Explain() {
   useEffect(() => {
     loadPredictions();
   }, [loadPredictions]);
+
+  // Fetch document details and text content for the selected prediction
+  useEffect(() => {
+    const cur = predictions.find((p) => String(p.id) === String(selectedId));
+    if (!cur?.document_id) {
+      setDocumentData(null);
+      setSourceText("");
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingDoc(true);
+
+    apiClient
+      .get(`/documents/${cur.document_id}`)
+      .then((res) => {
+        if (!cancelled) setDocumentData(res.data);
+      })
+      .catch(() => {
+        if (!cancelled) setDocumentData(null);
+      });
+
+    apiClient
+      .get(`/documents/${cur.document_id}/content`)
+      .then((res) => {
+        if (!cancelled) setSourceText(res.data.content || "");
+      })
+      .catch(() => {
+        if (!cancelled) setSourceText("");
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDoc(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, predictions]);
 
   // Everything the API can currently attach to a prediction.
   useEffect(() => {
@@ -269,6 +327,13 @@ export default function Explain() {
 
   const handleGenerate = async (methodKey) => {
     if (!selectedId) return;
+
+    const cur = predictions.find((item) => String(item.id) === String(selectedId));
+    const isText = Boolean(cur?.model_name?.includes("text") || cur?.model_name?.includes("review"));
+    if (isText && methodKey === "gradcam") {
+      setGenerateError("Grad-CAM is not applicable for transformer sequence models (DistilBERT). Interpretability is provided by SHAP token attributions and LIME local surrogates.");
+      return;
+    }
 
     setGeneratingMethod(methodKey);
     setGenerateError("");
@@ -426,6 +491,8 @@ export default function Explain() {
                         ? "Audio"
                         : item.model_name.includes("mobilenet") || item.model_name.includes("image")
                         ? "Image"
+                        : item.model_name.includes("review")
+                        ? "Review"
                         : "Text";
                       return (
                         <option key={item.id} value={item.id}>
@@ -437,7 +504,14 @@ export default function Explain() {
 
                   {selected && (
                     <div className="mt-4 grid grid-cols-2 gap-3">
-                      <Meta label="Document" value={`#${selected.document_id}`} />
+                      <Meta
+                        label="Document"
+                        value={
+                          documentData?.original_file_name
+                            ? `${documentData.original_file_name} (#${selected.document_id})`
+                            : `#${selected.document_id}`
+                        }
+                      />
                       <Meta label="Model" value={selected.model_name} />
                       <Meta
                         label="Latency"
@@ -476,6 +550,30 @@ export default function Explain() {
               </div>
             </Card>
 
+            {/* Source Document Context & Extracted Content Panel */}
+            {selected && (
+              <SourceDocumentCard
+                document={documentData}
+                documentId={selected.document_id}
+                sourceText={sourceText}
+                loading={loadingDoc}
+                onCopy={() => {
+                  if (sourceText) {
+                    navigator.clipboard.writeText(sourceText);
+                    setCopiedSource(true);
+                    setTimeout(() => setCopiedSource(false), 2000);
+                  }
+                }}
+                copied={copiedSource}
+                isText={Boolean(
+                  selected.model_name.includes("text") ||
+                  selected.model_name.includes("review")
+                )}
+                showFull={showFullSource}
+                onToggleShowFull={() => setShowFullSource((v) => !v)}
+              />
+            )}
+
             {/* The three attribution methods */}
             {generateError && <Alert variant="error">{generateError}</Alert>}
 
@@ -486,6 +584,11 @@ export default function Explain() {
                   (item) => item.method === method.key
                 );
                 const isGenerating = generatingMethod === method.key;
+                const isTextModel = Boolean(
+                  selected?.model_name?.includes("text") ||
+                  selected?.model_name?.includes("review")
+                );
+                const isGradcamText = isTextModel && method.key === "gradcam";
 
                 return (
                   <Card key={method.key} className="flex flex-col">
@@ -495,7 +598,9 @@ export default function Explain() {
                       >
                         <Icon className="h-5 w-5" strokeWidth={2} />
                       </div>
-                      {!method.available ? (
+                      {isGradcamText ? (
+                        <Badge tone="warning">N/A for Text / Review</Badge>
+                      ) : !method.available ? (
                         <Badge tone="warning">phase 7 — deferred</Badge>
                       ) : explanation ? (
                         <Badge tone="brand">generated</Badge>
@@ -514,7 +619,21 @@ export default function Explain() {
                       {method.detail}
                     </p>
 
-                    {!method.available ? (
+                    {isGradcamText ? (
+                      <div className="mt-5 flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-line/10 bg-void-900/40 p-5 text-center">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-line/15 bg-void-800 text-slate-400">
+                          <Flame className="h-4 w-4 opacity-40 text-threat" />
+                        </div>
+                        <div>
+                          <p className="font-mono text-xs font-semibold text-slate-300">
+                            Not Applicable for Transformers
+                          </p>
+                          <p className="mt-1 text-[0.72rem] leading-relaxed text-slate-400">
+                            Grad-CAM requires spatial or temporal CNN activation grids (Image, Video, Audio). Transformer sequence models (DistilBERT) are interpreted via token Shapley values (<strong className="text-volt-400 font-medium">SHAP</strong>) and local surrogate linear features (<strong className="text-neon-400 font-medium">LIME</strong>).
+                          </p>
+                        </div>
+                      </div>
+                    ) : !method.available ? (
                       // Placeholder canvas — deliberately empty, not fabricated
                       <div className="mt-5 flex flex-1 items-center justify-center rounded-xl border border-dashed border-line/10 bg-void-900/50 py-10">
                         <div className="text-center">
@@ -526,7 +645,11 @@ export default function Explain() {
                       </div>
                     ) : explanation ? (
                       <div className="mt-5 flex-1">
-                        <ExplanationArtifact explanation={explanation} />
+                        <ExplanationArtifact
+                          explanation={explanation}
+                          predictedLabel={selected?.predicted_label}
+                          sourceText={sourceText}
+                        />
                       </div>
                     ) : (
                       <div className="mt-5 flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-line/10 bg-void-900/50 py-10">
@@ -653,14 +776,490 @@ function Meta({ label, value }) {
   );
 }
 
+function SourceDocumentCard({
+  document,
+  documentId,
+  sourceText,
+  loading,
+  onCopy,
+  copied,
+  isText,
+  showFull,
+  onToggleShowFull,
+}) {
+  const fileName = document?.original_file_name || `Document #${documentId}`;
+  const meta = fileMeta(fileName);
+  const Icon = meta.icon;
+  const fileUrl = getDocumentFileUrl(documentId);
+  const downloadUrl = getDocumentFileUrl(documentId, true);
+
+  const wordCount = sourceText
+    ? sourceText.trim().split(/\s+/).filter(Boolean).length
+    : 0;
+
+  return (
+    <Card className="border border-line/20 bg-void-900/60 p-5">
+      <div className="flex flex-col gap-4">
+        {/* Header: Document Identity + Action Buttons */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line/10 pb-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div
+              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border ${meta.accent}`}
+            >
+              <Icon className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h4 className="font-display text-base font-bold text-slate-100 truncate max-w-md sm:max-w-xl">
+                  {fileName}
+                </h4>
+                <Badge tone="neutral" className="text-[0.68rem] shrink-0 font-mono">
+                  Doc #{documentId}
+                </Badge>
+              </div>
+              <p className="font-mono text-xs text-slate-400 mt-0.5">
+                {document?.document_type?.type_name || meta.type} ·{" "}
+                {document?.file_size ? formatBytes(document.file_size) : "Uploaded File"}
+                {isText && sourceText && ` · ${sourceText.length.toLocaleString()} characters · ${wordCount.toLocaleString()} words`}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {sourceText && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                icon={copied ? Check : Copy}
+                onClick={onCopy}
+                className="h-8 text-xs font-semibold"
+              >
+                {copied ? "Copied Source Text!" : "Copy Source Text"}
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              icon={ExternalLink}
+              onClick={() => window.open(fileUrl, "_blank")}
+              className="h-8 text-xs"
+            >
+              Open File
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              icon={Download}
+              onClick={() => window.open(downloadUrl, "_blank")}
+              title="Download original file"
+              className="h-8 px-2.5 text-xs"
+            />
+          </div>
+        </div>
+
+        {/* Text preview if text content is available */}
+        {isText && (
+          <div>
+            <div className="flex items-center justify-between pb-2">
+              <div className="flex items-center gap-2">
+                <p className="hud-label text-slate-300">
+                  Extracted Document Text for Interpretability
+                </p>
+                {document?.mime_type && (
+                  <span className="font-mono text-[0.65rem] text-slate-500 uppercase">
+                    ({document.mime_type})
+                  </span>
+                )}
+              </div>
+              {sourceText && sourceText.length > 350 && (
+                <button
+                  type="button"
+                  onClick={onToggleShowFull}
+                  className="flex items-center gap-1 font-mono text-[0.72rem] text-neon-400 hover:text-neon-300 transition"
+                >
+                  {showFull ? (
+                    <>
+                      Collapse text view <ChevronUp className="h-3 w-3" />
+                    </>
+                  ) : (
+                    <>
+                      Expand full document ({sourceText.length.toLocaleString()} chars) <ChevronDown className="h-3 w-3" />
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+
+            {loading ? (
+              <div className="space-y-2 py-3">
+                <Skeleton className="h-4 w-3/4" />
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-2/3" />
+              </div>
+            ) : sourceText ? (
+              <div
+                className={`overflow-y-auto rounded-xl border border-line/10 bg-void-950/80 p-4 font-mono text-xs text-slate-200 select-text leading-relaxed whitespace-pre-wrap selection:bg-neon-500/30 ${
+                  showFull ? "max-h-[30rem]" : "max-h-40"
+                }`}
+              >
+                {sourceText}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-line/10 bg-void-950/40 p-4 text-center">
+                <p className="text-xs text-slate-500">
+                  No readable text content available for this document.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function TokenAttributionViewer({ explanation, predictedLabel, sourceText }) {
+  const [viewMode, setViewMode] = useState("highlight"); // "highlight" | "features"
+  const [searchTerm, setSearchTerm] = useState("");
+  const [activeToken, setActiveToken] = useState(null);
+  const [copiedTokens, setCopiedTokens] = useState(false);
+  const [copiedText, setCopiedText] = useState(false);
+  const [showAllFeatures, setShowAllFeatures] = useState(false);
+
+  const tokens = useMemo(() => {
+    try {
+      const parsed = JSON.parse(explanation.artifact);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }, [explanation.artifact]);
+
+  const maxWeight = useMemo(() => {
+    return Math.max(1e-6, ...tokens.map((item) => Math.abs(item.weight))) || 1;
+  }, [tokens]);
+
+  const targetLabel = predictedLabel || "Predicted Label";
+  const isFakeVerdict = targetLabel.toLowerCase().includes("fake") || targetLabel.toLowerCase().includes("deepfake");
+  const oppositeLabel = isFakeVerdict ? "Genuine" : "Fake";
+
+  // Sorted feature rankings
+  const { positiveFeatures, negativeFeatures } = useMemo(() => {
+    const pos = tokens.filter((t) => t.weight >= 0).sort((a, b) => b.weight - a.weight);
+    const neg = tokens.filter((t) => t.weight < 0).sort((a, b) => a.weight - b.weight);
+    return { positiveFeatures: pos, negativeFeatures: neg };
+  }, [tokens]);
+
+  // Filtered tokens for search
+  const filteredTokens = useMemo(() => {
+    if (!searchTerm.trim()) return tokens;
+    const lower = searchTerm.toLowerCase();
+    return tokens.map((t) => ({
+      ...t,
+      matchesSearch: t.token.toLowerCase().includes(lower),
+    }));
+  }, [tokens, searchTerm]);
+
+  // Copy token weights as structured table
+  const handleCopyTokensTable = () => {
+    const header = `DeepShield AI - ${explanation.method.toUpperCase()} Token Attributions\nTarget Verdict: ${targetLabel}\nTotal Features: ${tokens.length}\n\nToken\tWeight\tInfluence\n---------------------------------------------\n`;
+    const rows = tokens
+      .map(
+        (t) =>
+          `${t.token}\t${t.weight >= 0 ? "+" : ""}${t.weight.toFixed(5)}\t${
+            t.weight >= 0 ? `Towards ${targetLabel}` : `Towards ${oppositeLabel}`
+          }`
+      )
+      .join("\n");
+    navigator.clipboard.writeText(header + rows);
+    setCopiedTokens(true);
+    setTimeout(() => setCopiedTokens(false), 2000);
+  };
+
+  // Copy plain text: prefer sourceText if available, or reconstruct from tokens
+  const handleCopyReconstructedText = () => {
+    if (sourceText) {
+      navigator.clipboard.writeText(sourceText);
+      setCopiedText(true);
+      setTimeout(() => setCopiedText(false), 2000);
+      return;
+    }
+    let reconstructed = "";
+    tokens.forEach((t, i) => {
+      const tok = t.token;
+      if (i === 0 || /^[.,!?;:')]/.test(tok) || tok.startsWith("##") || tok.startsWith("'")) {
+        reconstructed += tok.replace(/^##/, "");
+      } else {
+        reconstructed += " " + tok;
+      }
+    });
+    navigator.clipboard.writeText(reconstructed.trim());
+    setCopiedText(true);
+    setTimeout(() => setCopiedText(false), 2000);
+  };
+
+  if (!tokens || tokens.length === 0) {
+    return (
+      <div className="rounded-xl border border-line/10 bg-void-900/50 p-4 text-center">
+        <p className="text-xs text-slate-500">No token attributions available.</p>
+      </div>
+    );
+  }
+
+  const currentInspected = activeToken || positiveFeatures[0] || tokens[0];
+
+  return (
+    <div className="space-y-3">
+      {/* Controls: Mode Switcher + Action Buttons */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line/10 pb-2.5">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setViewMode("highlight")}
+            className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+              viewMode === "highlight"
+                ? "bg-neon-500/20 text-neon-400 border border-neon-500/30"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            Highlighted Flow ({tokens.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode("features")}
+            className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+              viewMode === "features"
+                ? "bg-neon-500/20 text-neon-400 border border-neon-500/30"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            Ranked Features
+          </button>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-[0.7rem]"
+            icon={copiedTokens ? Check : Copy}
+            onClick={handleCopyTokensTable}
+            title="Copy tokens and attribution weights"
+          >
+            {copiedTokens ? "Copied Weights!" : "Copy Weights"}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-[0.7rem]"
+            icon={copiedText ? Check : FileText}
+            onClick={handleCopyReconstructedText}
+            title="Copy source/reconstructed text"
+          >
+            {copiedText ? "Copied Text!" : "Copy Text"}
+          </Button>
+        </div>
+      </div>
+
+      {/* Search Input for Long Documents */}
+      {tokens.length > 20 && (
+        <div className="relative">
+          <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-500" />
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Filter tokens or words..."
+            className="h-7.5 w-full rounded-lg border border-line/10 bg-void-950/60 pl-8 pr-3 text-xs text-slate-200 placeholder:text-slate-600 focus:border-neon-500/40 focus:outline-none"
+          />
+        </div>
+      )}
+
+      {/* Active Inspected Token Bar */}
+      {currentInspected && (
+        <div className="flex flex-wrap items-center justify-between rounded-lg border border-line/10 bg-void-950/80 px-3 py-2 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="text-slate-500 font-mono text-[0.7rem]">Inspecting:</span>
+            <span className="font-mono font-bold text-slate-100 bg-void-800 px-1.5 py-0.5 rounded border border-line/15">
+              &quot;{currentInspected.token}&quot;
+            </span>
+            <span
+              className={`font-mono text-xs font-semibold ${
+                currentInspected.weight >= 0 ? "text-threat" : "text-volt-400"
+              }`}
+            >
+              {currentInspected.weight >= 0 ? `+${currentInspected.weight.toFixed(5)}` : currentInspected.weight.toFixed(5)}
+            </span>
+          </div>
+          <span
+            className={`font-mono text-[0.68rem] px-2 py-0.5 rounded-full ${
+              currentInspected.weight >= 0
+                ? "bg-threat/10 text-threat border border-threat/20"
+                : "bg-volt-500/10 text-volt-400 border border-volt-500/20"
+            }`}
+          >
+            {currentInspected.weight >= 0 ? `pushes toward ${targetLabel}` : `pushes toward ${oppositeLabel}`}
+          </span>
+        </div>
+      )}
+
+      {/* VIEW MODE 1: HIGHLIGHTED FLOW */}
+      {viewMode === "highlight" && (
+        <div className="max-h-72 overflow-y-auto rounded-xl border border-line/10 bg-void-950/60 p-3.5 font-mono text-xs leading-relaxed select-text">
+          <div className="flex flex-wrap gap-1">
+            {filteredTokens.map((item, index) => {
+              const intensity = Math.min(1, Math.abs(item.weight) / maxWeight);
+              const isPositive = item.weight >= 0;
+              const isMatched = item.matchesSearch;
+              const isCurrent = activeToken === item;
+
+              const bg = isPositive
+                ? `rgba(239, 68, 68, ${0.14 + intensity * 0.55})`
+                : `rgba(59, 130, 246, ${0.12 + intensity * 0.45})`;
+
+              const border = isPositive
+                ? `rgba(239, 68, 68, ${0.25 + intensity * 0.45})`
+                : `rgba(59, 130, 246, ${0.25 + intensity * 0.45})`;
+
+              return (
+                <span
+                  key={index}
+                  onMouseEnter={() => setActiveToken(item)}
+                  onClick={() => setActiveToken(item)}
+                  title={`"${item.token}": ${item.weight >= 0 ? "+" : ""}${item.weight.toFixed(5)} (${isPositive ? `toward ${targetLabel}` : `toward ${oppositeLabel}`})`}
+                  style={{
+                    backgroundColor: bg,
+                    borderColor: isCurrent ? "#22d3ee" : isMatched ? "#facc15" : border,
+                  }}
+                  className={`inline-block cursor-pointer rounded px-1.5 py-0.5 border text-slate-100 transition-all hover:scale-105 ${
+                    isMatched ? "ring-2 ring-yellow-400" : ""
+                  } ${isCurrent ? "ring-2 ring-neon-400" : ""}`}
+                >
+                  {item.token}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* VIEW MODE 2: RANKED FEATURES BAR CHART */}
+      {viewMode === "features" && (
+        <div className="space-y-4 max-h-80 overflow-y-auto pr-1">
+          {/* Top Positive Influencers */}
+          <div>
+            <div className="flex items-center justify-between pb-1.5 border-b border-line/10">
+              <span className="hud-label text-threat">
+                Signals Pushing Toward {targetLabel} ({positiveFeatures.length})
+              </span>
+              <span className="font-mono text-[0.65rem] text-slate-500">Weight</span>
+            </div>
+            <div className="mt-2 space-y-1.5">
+              {(showAllFeatures ? positiveFeatures : positiveFeatures.slice(0, 8)).map((f, i) => {
+                const pct = Math.min(100, Math.round((Math.abs(f.weight) / maxWeight) * 100));
+                return (
+                  <div
+                    key={i}
+                    onMouseEnter={() => setActiveToken(f)}
+                    className="group flex items-center gap-2 text-xs font-mono rounded-lg p-1.5 hover:bg-void-900/60 transition cursor-pointer"
+                  >
+                    <span className="w-5 text-slate-600 text-[0.68rem]">#{i + 1}</span>
+                    <span className="w-24 truncate font-semibold text-slate-200 group-hover:text-threat">
+                      {f.token}
+                    </span>
+                    <div className="relative h-2.5 flex-1 overflow-hidden rounded bg-void-900">
+                      <div
+                        style={{ width: `${Math.max(6, pct)}%` }}
+                        className="h-full rounded bg-threat/80 group-hover:bg-threat transition-all"
+                      />
+                    </div>
+                    <span className="w-16 text-right text-slate-300 font-mono text-[0.7rem]">
+                      +{f.weight.toFixed(4)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Top Negative Influencers */}
+          {negativeFeatures.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between pb-1.5 border-b border-line/10">
+                <span className="hud-label text-volt-400">
+                  Signals Pushing Toward {oppositeLabel} ({negativeFeatures.length})
+                </span>
+                <span className="font-mono text-[0.65rem] text-slate-500">Weight</span>
+              </div>
+              <div className="mt-2 space-y-1.5">
+                {(showAllFeatures ? negativeFeatures : negativeFeatures.slice(0, 8)).map((f, i) => {
+                  const pct = Math.min(100, Math.round((Math.abs(f.weight) / maxWeight) * 100));
+                  return (
+                    <div
+                      key={i}
+                      onMouseEnter={() => setActiveToken(f)}
+                      className="group flex items-center gap-2 text-xs font-mono rounded-lg p-1.5 hover:bg-void-900/60 transition cursor-pointer"
+                    >
+                      <span className="w-5 text-slate-600 text-[0.68rem]">#{i + 1}</span>
+                      <span className="w-24 truncate font-semibold text-slate-200 group-hover:text-volt-400">
+                        {f.token}
+                      </span>
+                      <div className="relative h-2.5 flex-1 overflow-hidden rounded bg-void-900">
+                        <div
+                          style={{ width: `${Math.max(6, pct)}%` }}
+                          className="h-full rounded bg-volt-500/80 group-hover:bg-volt-400 transition-all"
+                        />
+                      </div>
+                      <span className="w-16 text-right text-slate-300 font-mono text-[0.7rem]">
+                        {f.weight.toFixed(4)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {tokens.length > 16 && (
+            <div className="text-center pt-1">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-xs text-slate-400 hover:text-slate-200"
+                onClick={() => setShowAllFeatures((v) => !v)}
+              >
+                {showAllFeatures ? "Show Top Features" : `Show All ${tokens.length} Features`}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Legend Footer */}
+      <div className="pt-2 border-t border-line/10 flex flex-wrap items-center justify-between gap-2 font-mono text-[0.68rem] text-slate-500">
+        <span className="flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-sm bg-threat/70 border border-threat" />
+          toward {targetLabel} (positive weight)
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-sm bg-volt-500/70 border border-volt-400" />
+          toward {oppositeLabel} (counter-evidence)
+        </span>
+      </div>
+    </div>
+  );
+}
+
 /**
- * Renders one generated explanation artefact. `artifact_type` decides the
- * shape: "image" is a base64 PNG (Grad-CAM's heatmap overlay), "tokens" is
- * a JSON-encoded array of {token, weight} (SHAP) — see
- * app/schemas/explanation.py for why the wire format keeps `artifact` as a
- * plain string either way instead of a union type.
+ * Renders one generated explanation artefact.
  */
-function ExplanationArtifact({ explanation }) {
+function ExplanationArtifact({ explanation, predictedLabel, sourceText }) {
   if (explanation.artifact_type === "image") {
     return (
       <img
@@ -672,63 +1271,12 @@ function ExplanationArtifact({ explanation }) {
   }
 
   if (explanation.artifact_type === "tokens") {
-    let tokens = [];
-    try {
-      tokens = JSON.parse(explanation.artifact);
-    } catch {
-      return (
-        <p className="text-xs text-slate-600">
-          Could not parse the attribution payload.
-        </p>
-      );
-    }
-
-    const maxWeight =
-      Math.max(1e-6, ...tokens.map((item) => Math.abs(item.weight))) || 1;
-
     return (
-      <div className="rounded-xl border border-line/10 bg-void-900/50 p-4">
-        <div className="flex flex-wrap gap-1.5 text-sm leading-relaxed">
-          {tokens.map((item, index) => {
-            const intensity = Math.min(
-              1,
-              Math.abs(item.weight) / maxWeight
-            );
-            // Positive weight = pushed the model toward the predicted
-            // label; negative = pulled away from it.
-            const background =
-              item.weight >= 0
-                ? `rgba(255, 90, 90, ${0.12 + intensity * 0.55})`
-                : `rgba(90, 140, 255, ${0.1 + intensity * 0.4})`;
-            return (
-              <span
-                key={index}
-                title={item.weight.toFixed(4)}
-                style={{ background }}
-                className="rounded px-1 py-0.5 font-mono text-slate-100"
-              >
-                {item.token}
-              </span>
-            );
-          })}
-        </div>
-        <p className="mt-3 flex items-center gap-3 font-mono text-[0.65rem] uppercase tracking-wider text-slate-600">
-          <span className="flex items-center gap-1">
-            <span
-              className="h-2.5 w-2.5 rounded-sm"
-              style={{ background: "rgba(255, 90, 90, 0.5)" }}
-            />
-            toward predicted label
-          </span>
-          <span className="flex items-center gap-1">
-            <span
-              className="h-2.5 w-2.5 rounded-sm"
-              style={{ background: "rgba(90, 140, 255, 0.4)" }}
-            />
-            away from it
-          </span>
-        </p>
-      </div>
+      <TokenAttributionViewer
+        explanation={explanation}
+        predictedLabel={predictedLabel}
+        sourceText={sourceText}
+      />
     );
   }
 

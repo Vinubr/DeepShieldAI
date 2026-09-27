@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     RAG_EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
     RAG_CHUNK_SIZE: int = 150
 
+    # ---------- LLM / Grok RAG ----------
+    GROK_API_KEY: str = ""
+    XAI_API_KEY: str = ""
+    GROK_MODEL: str = "grok-2-latest"
+    GROK_API_BASE: str = "https://api.x.ai/v1"
+
     # ---------- ML ----------
     MODEL_DIR: str = "models"
     INFERENCE_DEVICE: str = "cpu"          # "cuda" if a GPU is available
@@ -92,6 +98,7 @@ class Settings(BaseSettings):
     # uniformly sampled per clip, 224x224.
     VIDEO_NUM_FRAMES: int = 16
     VIDEO_FRAME_SIZE: int = 224
+    VIDEO_DECISION_THRESHOLD: float = 0.58
 
     # Text detector (distilbert-base-uncased, fine-tuned for news/AI-text
     # classification; trained artefact `checkpoints/text/`, copied locally

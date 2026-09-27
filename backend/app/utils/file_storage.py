@@ -67,8 +67,9 @@ class FileStorage:
     def delete_file(
         file_path: str,
     ) -> None:
-
-        path = Path(file_path)
-
-        if path.exists():
-            path.unlink()
+        try:
+            path = Path(file_path)
+            if path.exists() and path.is_file():
+                path.unlink()
+        except Exception:
+            pass

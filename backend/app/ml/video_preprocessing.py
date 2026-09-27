@@ -57,24 +57,34 @@ def extract_frames(
         raise ValueError(f"Video reports zero frames: {video_path}")
 
     frame_indices = np.linspace(0, total_frames - 1, num_frames).astype(int)
-    frame_idx_set = set(frame_indices.tolist())
 
+    # 1. Fast direct seek extraction
     frames = []
-    current_idx = 0
-    max_idx = frame_indices.max()
-
-    while current_idx <= max_idx:
+    for idx in frame_indices:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
         ret, frame = cap.read()
-
-        if not ret:
-            break
-
-        if current_idx in frame_idx_set:
+        if ret and frame is not None:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame = cv2.resize(frame, (frame_size, frame_size))
             frames.append(frame)
 
-        current_idx += 1
+    # 2. Sequential fallback if direct seek was unsupported or yielded insufficient frames
+    if len(frames) < num_frames // 2:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        frames = []
+        frame_idx_set = set(frame_indices.tolist())
+        current_idx = 0
+        max_idx = frame_indices.max()
+
+        while current_idx <= max_idx:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if current_idx in frame_idx_set:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame = cv2.resize(frame, (frame_size, frame_size))
+                frames.append(frame)
+            current_idx += 1
 
     cap.release()
 

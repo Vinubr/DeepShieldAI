@@ -128,11 +128,11 @@ class ChromaStore:
         metadatas = result.get("metadatas", [[]])[0]
         distances = result.get("distances", [[]])[0]
 
-        # Only keep chunks that are part of the official knowledge base (have source_id)
+        # Keep chunks from both official knowledge sources and user-indexed documents
         filtered_results = [
             {"text": text, "metadata": metadata, "distance": distance}
             for text, metadata, distance in zip(documents, metadatas, distances)
-            if metadata and "source_id" in metadata
+            if metadata
         ]
 
         return filtered_results[:top_k]

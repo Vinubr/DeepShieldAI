@@ -30,6 +30,17 @@ def _to_me(user: User) -> UserMeResponse:
     )
 
 
+from app.constants.roles import Roles
+from app.dependencies.rbac import require_roles
+from pydantic import BaseModel, EmailStr
+
+class AdminUserCreate(BaseModel):
+    full_name: str
+    email: EmailStr
+    password: str
+    role_name: str = "User"
+
+
 @router.post("/register", response_model=UserResponse)
 def register(
     user: UserCreate,
@@ -41,6 +52,42 @@ def register(
         return service.register_user(user)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/users", response_model=UserResponse)
+def create_user_by_admin(
+    payload: AdminUserCreate,
+    db: Session = Depends(get_db),
+    admin_user: User = Depends(require_roles(Roles.ADMIN)),
+):
+    """
+    Provision a new user account by an administrator without logging out.
+    """
+    service = AuthService(db)
+
+    try:
+        return service.register_user(
+            UserCreate(
+                full_name=payload.full_name,
+                email=payload.email,
+                password=payload.password,
+            ),
+            role_name=payload.role_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/users", response_model=list[UserMeResponse])
+def list_users(
+    db: Session = Depends(get_db),
+    admin_user: User = Depends(require_roles(Roles.ADMIN)),
+):
+    """
+    List all registered user accounts (Admin only).
+    """
+    users = db.query(User).all()
+    return [_to_me(u) for u in users]
 
 
 @router.post("/login", response_model=TokenResponse)

@@ -4,10 +4,10 @@
 
 DeepShieldAI uses several local approximation methods to highlight influential features in the input data. These are not proof of manipulation, but indicators of model focus.
 
-- **Grad-CAM**: Uses gradients from a convolutional feature layer to highlight image regions (or video frames) that influenced the selected class.
-- **Integrated Gradients**: Compares the audio waveform with a silence baseline to identify influential time windows.
-- **SHAP**: Masks text tokens and estimates how their presence changes the selected class score.
-- **LIME**: Perturbs image superpixels or text tokens and fits a simple local surrogate model.
+- **Grad-CAM**: Uses gradients from convolutional feature layers to highlight 2D spatial heatmap regions for Image, 3D keyframe overlays for Video, and 1D temporal segment activations for Audio.
+- **SHAP**: Provides Shapley additive attributions across Text/Review word tokens (highlighting promotional hyperbole vs grounded purchase details), Image superpixels, and Audio temporal waveform segments.
+- **LIME**: Perturbs tokens, superpixels, or temporal chunks and fits an interpretable local surrogate linear model across all modalities (Text, Review, Image, Video, Audio).
+- **Linguistic Forensics**: Analyzes Type-Token Ratio (TTR), stylometric punctuation clustering, commercial hyperbole constructs, and cross-references them against grounded RAG knowledge citations.
 
 *Note: Explanations are meaningful only when the underlying detector has learned relevant and generalizable signals.*
 

@@ -7,7 +7,7 @@ const variants = {
   volt:
     "bg-volt-gradient text-white shadow-tile hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-45",
   secondary:
-    "border border-line/12 bg-hover/5 text-slate-200 hover:border-neon-500/45 hover:bg-hover/10 hover:text-slate-50 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-40 disabled:translate-y-0",
+    "border border-line bg-void-700 text-slate-200 hover:border-line-strong hover:bg-void-600 hover:text-slate-50 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-40 disabled:translate-y-0 shadow-sm",
   ghost:
     "text-slate-400 hover:bg-hover/8 hover:text-slate-50 disabled:opacity-40",
   danger:
@@ -17,6 +17,7 @@ const variants = {
 };
 
 const sizes = {
+  xs: "h-8 px-2.5 text-xs gap-1.5",
   sm: "h-9 px-3.5 text-xs gap-1.5",
   md: "h-11 px-5 text-sm gap-2",
   lg: "h-12 px-6 text-sm gap-2",

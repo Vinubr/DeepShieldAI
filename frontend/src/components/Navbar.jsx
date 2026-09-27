@@ -68,7 +68,7 @@ function useActivityFeed() {
           id: `prediction-${p.id}`,
           kind: "prediction",
           label: p.predicted_label,
-          title: `${p.predicted_label} · ${(p.confidence_score * 100).toFixed(1)}%`,
+          title: p.predicted_label,
           detail: `${p.model_name} · document #${p.document_id}`,
           at: p.created_at,
           to: "/history",

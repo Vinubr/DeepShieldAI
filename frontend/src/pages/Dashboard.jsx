@@ -157,7 +157,7 @@ export default function Dashboard() {
       id: `p-${p.id}`,
       icon: verdictOf(p.predicted_label).icon,
       tile: verdictOf(p.predicted_label).tile,
-      title: `${p.predicted_label} — ${(p.confidence_score * 100).toFixed(1)}%`,
+      title: p.predicted_label,
       detail: `${p.model_name} · document #${p.document_id}`,
       at: p.created_at,
     }));
@@ -193,11 +193,6 @@ export default function Dashboard() {
     if (!ok) setError("Nothing to export yet — run an analysis first.");
   };
 
-  const avgConfidence =
-    stats.average_confidence !== null && stats.average_confidence !== undefined
-      ? `${(stats.average_confidence * 100).toFixed(1)}%`
-      : "—";
-
   const summaryCards = [
     {
       label: "Documents",
@@ -214,10 +209,10 @@ export default function Dashboard() {
       accent: "volt",
     },
     {
-      label: "Avg confidence",
-      value: avgConfidence,
-      hint: "Across all runs",
-      icon: GaugeIcon,
+      label: "Reports",
+      value: stats.total_reports ?? 0,
+      hint: "Forensic dossiers",
+      icon: FileStack,
       accent: "clear",
     },
     {
@@ -325,16 +320,16 @@ export default function Dashboard() {
             </div>
           </Card>
 
-          {/* Confidence gauge */}
+          {/* Integrity verification gauge */}
           <Card className="flex flex-col">
-            <p className="text-sm font-bold text-slate-50">Detection confidence</p>
-            <p className="mt-1 text-xs text-slate-400">Mean across all runs</p>
+            <p className="text-sm font-bold text-slate-50">Integrity verification</p>
+            <p className="mt-1 text-xs text-slate-400">Authentic vs synthetic share</p>
 
             <div className="flex flex-1 items-center justify-center pt-4">
-              {stats.average_confidence !== null ? (
+              {stats.total_predictions > 0 ? (
                 <Gauge
-                  value={stats.average_confidence * 100}
-                  caption="Average score"
+                  value={Math.max(0, Math.min(100, Math.round(100 - threatShare * 10)))}
+                  caption="Authentic share"
                   size={190}
                 />
               ) : (
@@ -602,7 +597,7 @@ export default function Dashboard() {
               <table className="w-full text-left text-sm">
                 <thead>
                   <tr className="border-y border-line/8">
-                    {["Verdict", "Confidence", "Model", "Status", "When"].map(
+                    {["Verdict", "Model", "Status", "When"].map(
                       (heading) => (
                         <th
                           key={heading}
@@ -637,21 +632,6 @@ export default function Dashboard() {
                                 {row.predicted_label}
                               </span>
                             </span>
-                          </td>
-                          <td className="px-6 py-3.5">
-                            <div className="flex items-center gap-2">
-                              <div className="h-1.5 w-16 overflow-hidden rounded-full bg-hover/8">
-                                <div
-                                  className="h-full rounded-full bg-neon-gradient"
-                                  style={{
-                                    width: `${row.confidence_score * 100}%`,
-                                  }}
-                                />
-                              </div>
-                              <span className="font-mono text-xs text-slate-400">
-                                {(row.confidence_score * 100).toFixed(0)}%
-                              </span>
-                            </div>
                           </td>
                           <td className="px-6 py-3.5 font-mono text-xs text-slate-500">
                             {row.model_name}

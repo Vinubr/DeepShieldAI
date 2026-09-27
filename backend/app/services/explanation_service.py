@@ -6,19 +6,15 @@ from app.ml.registry import registry
 from app.models.explanation import Explanation
 from app.repositories.explanation_repository import ExplanationRepository
 from app.repositories.prediction_repository import PredictionRepository
-from xai import gradcam, shap_explainer
+from xai import audio_shap, gradcam, lime_explainer, shap_explainer
 
 logger = get_logger(__name__)
 
-#: Which explanation methods are meaningful for which modality. Grad-CAM
-#: needs a convolutional feature map (Image only, in this phase); SHAP here
-#: is specifically the text-token explainer, so it only applies to the two
-#: DistilBERT-based modalities. Audio and Video are out of scope for Phase 7
-#: (see PROJECT_STATUS_RECHECK) — attempting either raises a clear 400
-#: rather than a confusing failure deep inside an xai module.
+#: Which explanation methods are meaningful for which modality.
 SUPPORTED_METHODS: dict[str, set[str]] = {
-    "gradcam": {"Image"},
-    "shap": {"Text", "Review"},
+    "gradcam": {"Image", "Video", "Audio"},
+    "shap": {"Image", "Video", "Audio", "Text", "Review"},
+    "lime": {"Image", "Video", "Audio", "Text", "Review"},
 }
 
 
@@ -63,22 +59,58 @@ class ExplanationService:
         detector = registry.get_detector(modality)
 
         if method == "gradcam":
-            result = gradcam.generate(
-                model=detector.underlying_model,
-                file_path=document.file_path,
-                input_size=detector.input_size,
-                preprocess_mode=detector.preprocess_mode,
-            )
-            artifact = result["artifact"]
+            if modality == "Video":
+                result = gradcam.generate_video(
+                    detector=detector,
+                    file_path=document.file_path,
+                )
+            elif modality == "Audio":
+                result = gradcam.generate_audio(
+                    detector=detector,
+                    file_path=document.file_path,
+                )
+            else:  # Image
+                result = gradcam.generate(
+                    model=detector.underlying_model,
+                    file_path=document.file_path,
+                    input_size=detector.input_size,
+                    preprocess_mode=detector.preprocess_mode,
+                )
 
-        else:  # "shap"
-            result = shap_explainer.generate(
+        elif method == "lime":
+            result = lime_explainer.generate(
                 detector=detector,
                 file_path=document.file_path,
+                modality=modality,
             )
-            # Stored (and shipped over the wire) as a JSON string — see
-            # ExplanationResponse's docstring for why.
-            artifact = json.dumps(result["artifact"])
+
+        elif method == "shap":
+            if modality == "Image":
+                result = shap_explainer.generate_image(
+                    detector=detector,
+                    file_path=document.file_path,
+                )
+            elif modality == "Video":
+                result = shap_explainer.generate_video(
+                    detector=detector,
+                    file_path=document.file_path,
+                )
+            elif modality == "Audio":
+                result = audio_shap.generate(
+                    detector=detector,
+                    file_path=document.file_path,
+                )
+            else:  # Text / Review
+                result = shap_explainer.generate(
+                    detector=detector,
+                    file_path=document.file_path,
+                )
+
+        artifact = (
+            result["artifact"]
+            if result["artifact_type"] == "image"
+            else json.dumps(result["artifact"])
+        )
 
         explanation = Explanation(
             prediction_id=prediction_id,

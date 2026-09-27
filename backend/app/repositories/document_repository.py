@@ -42,13 +42,17 @@ class DocumentRepository:
 
     def get_documents_by_user(
         self,
-        user_id: int
+        user_id: int,
+        skip: int = 0,
+        limit: int = 50,
     ):
 
         return (
             self.db.query(Document)
             .filter(Document.uploaded_by == user_id)
             .order_by(Document.uploaded_at.desc())
+            .offset(skip)
+            .limit(limit)
             .all()
         )
 

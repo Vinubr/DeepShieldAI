@@ -4,22 +4,15 @@ from app.models.user import User
 from app.models.document_type import DocumentType
 from app.models.document import Document
 from app.models.prediction import Prediction
-
 from app.models.report import Report
 from app.models.audit_log import AuditLog
 from app.models.bot_analysis import BotAnalysis
-from app.models.bot_analysis import BotAnalysis
 from app.models.review_analysis import ReviewAnalysis
+from app.models.explanation import Explanation
 from app.models.knowledge_base import KnowledgeBase
 
-
-from app.models.document_type import DocumentType
 from app.core.config import settings
 from app.db.base import Base
-
-# Import all models here
-from app.models.role import Role
-from app.models.user import User
 
 
 

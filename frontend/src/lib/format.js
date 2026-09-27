@@ -99,3 +99,19 @@ export function exportCsv(filename, rows) {
   URL.revokeObjectURL(url);
   return true;
 }
+
+/**
+ * Returns the authenticated direct file access URL for a document.
+ * Can be used in <img>, <video>, <audio>, window.open(), or <a href="...">.
+ */
+export function getDocumentFileUrl(documentId, download = false) {
+  if (!documentId) return "";
+  const token = localStorage.getItem("access_token");
+  const baseUrl = `/api/documents/${documentId}/file`;
+  const params = new URLSearchParams();
+  if (token) params.set("token", token);
+  if (download) params.set("download", "true");
+  const query = params.toString();
+  return query ? `${baseUrl}?${query}` : baseUrl;
+}
+

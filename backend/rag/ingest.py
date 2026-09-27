@@ -2,7 +2,51 @@
 
 from pathlib import Path
 
-SUPPORTED_TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".xml"}
+import re
+
+SUPPORTED_TEXT_EXTENSIONS = {
+    ".txt", ".md", ".csv", ".tsv", ".json", ".xml", ".rtf", ".html", ".htm"
+}
+
+
+def clean_document_text(text: str) -> str:
+    """Normalize extracted document text while preserving paragraphs and lists."""
+    if not text:
+        return ""
+
+    text = text.replace("\u200b", "").replace("\xa0", " ").replace("\x0c", "\n")
+
+    # If the text has words broken on every line (common with some PDF text streams)
+    raw_lines = [line.strip() for line in text.splitlines()]
+    non_empty = [l for l in raw_lines if l]
+
+    if non_empty and (sum(len(l.split()) for l in non_empty) / len(non_empty)) < 2.0:
+        out = []
+        for word in non_empty:
+            if word in [":", ";", ",", ".", "!", "?", "%"]:
+                if out:
+                    out[-1] += word
+                else:
+                    out.append(word)
+            elif word.startswith(("•", "-", "*", "●", "▪", "–")) or re.match(r"^\d+[\.\)]$", word):
+                out.append("\n" + word)
+            elif word in ["Title:", "Verdict:", "Rating:", "Summary:", "Overview:"]:
+                if out and not out[-1].endswith("\n"):
+                    out.append("\n\n" + word)
+                else:
+                    out.append(word)
+            else:
+                out.append(word)
+        joined = " ".join(out)
+        joined = re.sub(r" \n", "\n", joined)
+        joined = re.sub(r"\n ", "\n", joined)
+        joined = re.sub(r"\n{3,}", "\n\n", joined)
+        text = joined
+    else:
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
 
 
 def extract_text(file_path: str) -> list[tuple[str, int | None]]:
@@ -12,8 +56,14 @@ def extract_text(file_path: str) -> list[tuple[str, int | None]]:
         raise FileNotFoundError(f"Knowledge source not found: {file_path}")
 
     suffix = path.suffix.lower()
+
     if suffix in SUPPORTED_TEXT_EXTENSIONS:
-        return [(path.read_text(encoding="utf-8", errors="replace"), None)]
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        if suffix in {".html", ".htm"}:
+            raw = re.sub(r"<[^>]+>", " ", raw)
+        elif suffix == ".rtf":
+            raw = re.sub(r"\\[a-zA-Z0-9\-]+ ?|\{|\}", " ", raw)
+        return [(clean_document_text(raw), None)]
 
     if suffix == ".pdf":
         try:
@@ -21,15 +71,38 @@ def extract_text(file_path: str) -> list[tuple[str, int | None]]:
         except ImportError as exc:
             raise RuntimeError("Install pypdf to ingest PDF knowledge sources.") from exc
         reader = PdfReader(str(path))
-        return [((page.extract_text() or ""), index + 1) for index, page in enumerate(reader.pages)]
+        pages = []
+        for index, page in enumerate(reader.pages):
+            raw_page = page.extract_text() or ""
+            cleaned = clean_document_text(raw_page)
+            if cleaned:
+                pages.append((cleaned, index + 1))
+        if not pages:
+            # Fallback if pages returned empty
+            pages.append(("", 1))
+        return pages
 
-    if suffix == ".docx":
+    if suffix in {".docx", ".doc"}:
         try:
             from docx import Document
-        except ImportError as exc:
-            raise RuntimeError("Install python-docx to ingest DOCX knowledge sources.") from exc
-        document = Document(str(path))
-        return [("\n".join(paragraph.text for paragraph in document.paragraphs), None)]
+            document = Document(str(path))
+            paragraphs = [p.text.strip() for p in document.paragraphs if p.text.strip()]
+            cleaned = clean_document_text("\n\n".join(paragraphs))
+            return [(cleaned, None)]
+        except Exception as docx_err:
+            if suffix == ".doc":
+                # Fallback text extraction for legacy binary .doc files
+                try:
+                    data = path.read_bytes()
+                    # Extract printable character sequences
+                    matches = re.findall(rb"[\x20-\x7E\s]{4,}", data)
+                    extracted = b" ".join(matches).decode("ascii", errors="replace")
+                    cleaned = clean_document_text(extracted)
+                    if cleaned:
+                        return [(cleaned, None)]
+                except Exception:
+                    pass
+            raise RuntimeError(f"Failed to extract document text: {docx_err}") from docx_err
 
     raise ValueError(f"Unsupported knowledge source type: {suffix}")
 

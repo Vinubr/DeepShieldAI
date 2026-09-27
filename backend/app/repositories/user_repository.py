@@ -1,3 +1,4 @@
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.user import User
@@ -9,9 +10,12 @@ class UserRepository:
         self.db = db
 
     def get_user_by_email(self, email: str) -> User | None:
+        if not email:
+            return None
+        cleaned_email = email.strip().lower()
         return (
             self.db.query(User)
-            .filter(User.email == email)
+            .filter(func.lower(User.email) == cleaned_email)
             .first()
         )
 

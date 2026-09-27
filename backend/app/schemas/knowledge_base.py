@@ -34,3 +34,23 @@ class KnowledgeBaseResponse(BaseModel):
 class KnowledgeBaseQuery(BaseModel):
     question: str
     top_k: int = 3
+
+
+class RAGQueryRequest(BaseModel):
+    query: str
+    top_k: int = 5
+    document_id: int | None = None
+
+
+class RAGCitation(BaseModel):
+    document_id: int | None = None
+    chunk_index: int | None = None
+    text: str
+    score: float
+
+
+class RAGQueryResponse(BaseModel):
+    query: str
+    answer: str
+    citations: list[RAGCitation]
+    total_results: int

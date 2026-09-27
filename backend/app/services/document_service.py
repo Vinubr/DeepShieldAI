@@ -81,10 +81,12 @@ class DocumentService:
 
     def get_documents_by_user(
         self,
-        user_id: int
+        user_id: int,
+        skip: int = 0,
+        limit: int = 50,
     ):
         return self.document_repository.get_documents_by_user(
-            user_id
+            user_id, skip=skip, limit=limit
         )
 
     def update_document(
@@ -140,6 +142,12 @@ class DocumentService:
             raise ValueError("Document not found.")
 
         FileStorage.delete_file(document.file_path)
+
+        try:
+            from rag.store import ChromaStore
+            ChromaStore().delete_document(document_id)
+        except Exception:
+            pass
 
         self.document_repository.delete_document(
             document

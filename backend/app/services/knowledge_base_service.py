@@ -1,7 +1,9 @@
+from pathlib import Path
 from app.models.knowledge_base import KnowledgeBase
 from rag.ingest import build_chunks
 from rag.store import ChromaStore
-from rag.sync import sync_knowledge_sources
+from rag.sync import sync_knowledge_sources, source_id
+from rag.query import RAGQueryEngine
 from app.core.config import settings
 from app.repositories.document_repository import (
     DocumentRepository,
@@ -24,6 +26,92 @@ class KnowledgeBaseService:
     ):
         self.repository = repository
         self.document_repository = document_repository
+
+    def _resolve_source_dir(self) -> Path:
+        source_dir = Path(settings.KNOWLEDGE_SOURCE_DIR)
+        if not source_dir.exists():
+            candidates = [
+                Path("knowledge-sources"),
+                Path(__file__).resolve().parents[2] / "knowledge-sources",
+                Path(__file__).resolve().parents[3] / "knowledge-sources",
+            ]
+            for cand in candidates:
+                if cand.exists():
+                    return cand
+        return source_dir
+
+    def sync_system_sources(self, user_id: int = 1):
+        """Synchronize repository markdown/pdf knowledge files into both ChromaDB and PostgreSQL."""
+        source_dir = self._resolve_source_dir()
+        if not source_dir.exists():
+            return {"status": "skipped", "reason": f"Directory not found: {source_dir}"}
+
+        # 1. Sync ChromaDB vector store
+        sync_result = sync_knowledge_sources(
+            source_dir,
+            embedding_model=settings.RAG_EMBEDDING_MODEL,
+            chunk_size=settings.RAG_CHUNK_SIZE,
+        )
+
+        # 2. Sync into PostgreSQL Document & KnowledgeBase tables so they appear in Registered Entries
+        from app.models.document import Document
+        from app.models.document_type import DocumentType
+        from app.models.user import User
+
+        db = self.document_repository.db
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            user = db.query(User).first()
+        effective_user_id = user.id if user else 1
+
+        doc_type = db.query(DocumentType).filter(DocumentType.type_name == "Text").first()
+        doc_type_id = doc_type.id if doc_type else 1
+
+        paths = sorted(
+            p for p in source_dir.rglob("*")
+            if p.is_file() and p.suffix.lower() in [".md", ".txt", ".pdf", ".docx"]
+        )
+
+        for path in paths:
+            doc = (
+                db.query(Document)
+                .filter(Document.original_file_name == path.name)
+                .first()
+            )
+            if not doc:
+                doc = Document(
+                    file_name=path.name,
+                    original_file_name=path.name,
+                    file_path=str(path.resolve()),
+                    file_size=path.stat().st_size,
+                    mime_type="text/markdown" if path.suffix == ".md" else "text/plain",
+                    description=f"System Knowledge Base document: {path.name}",
+                    uploaded_by=effective_user_id,
+                    document_type_id=doc_type_id,
+                )
+                db.add(doc)
+                db.commit()
+                db.refresh(doc)
+
+            kb_entry = (
+                db.query(KnowledgeBase)
+                .filter(KnowledgeBase.document_id == doc.id)
+                .first()
+            )
+            if not kb_entry:
+                chunks = build_chunks(str(path), chunk_size=settings.RAG_CHUNK_SIZE)
+                kb_entry = KnowledgeBase(
+                    document_id=doc.id,
+                    vector_id=source_id(path),
+                    embedding_model=settings.RAG_EMBEDDING_MODEL,
+                    chunk_count=len(chunks),
+                    index_status="Indexed",
+                )
+                db.add(kb_entry)
+                db.commit()
+                db.refresh(kb_entry)
+
+        return sync_result
 
     def create(
         self,
@@ -64,7 +152,22 @@ class KnowledgeBaseService:
         if document is None:
             raise ValueError("Document not found.")
 
-        chunks = build_chunks(document.file_path, chunk_size=chunk_size)
+        file_path = Path(document.file_path)
+        if not file_path.exists():
+            candidates = [
+                Path("backend") / file_path,
+                Path(__file__).resolve().parents[2] / file_path,
+                Path(__file__).resolve().parents[3] / file_path,
+            ]
+            for cand in candidates:
+                if cand.exists():
+                    file_path = cand
+                    break
+
+        if not file_path.exists():
+            raise ValueError(f"File not found on disk: {document.file_path}")
+
+        chunks = build_chunks(str(file_path), chunk_size=chunk_size)
         if not chunks:
             raise ValueError("The document did not contain extractable text.")
 
@@ -94,12 +197,10 @@ class KnowledgeBaseService:
         return self.repository.create(knowledge)
 
     def query(self, question: str, top_k: int = 5):
-        sync_knowledge_sources(
-            settings.KNOWLEDGE_SOURCE_DIR,
-            embedding_model=settings.RAG_EMBEDDING_MODEL,
-            chunk_size=settings.RAG_CHUNK_SIZE,
-        )
-        return ChromaStore().query(question, top_k=top_k)
+        store = ChromaStore()
+        if store.count() == 0:
+            self.sync_system_sources()
+        return RAGQueryEngine(store=store).query(question, top_k=top_k)
 
     def get_by_id(
         self,
@@ -117,9 +218,19 @@ class KnowledgeBaseService:
 
         return knowledge
 
-    def get_all(self, skip: int = 0, limit: int = 50):
-
-        return self.repository.get_all(skip, limit)
+    def get_all(
+        self,
+        skip: int = 0,
+        limit: int = 50,
+        user_id: int | None = None,
+        is_admin: bool = False,
+    ):
+        return self.repository.get_for_user(
+            user_id=user_id,
+            is_admin=is_admin,
+            skip=skip,
+            limit=limit,
+        )
 
     def get_by_document(
         self,

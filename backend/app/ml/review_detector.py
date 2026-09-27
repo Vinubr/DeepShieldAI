@@ -150,6 +150,8 @@ class ReviewDetector(BaseDetector):
 
         started = time.perf_counter()
 
+        text = load_text(file_path)
+
         tokens = self._tokenizer(text, return_tensors="pt", add_special_tokens=True)
         input_ids = tokens["input_ids"][0]
         total_tokens = len(input_ids)

@@ -13,6 +13,7 @@ import {
   Hash,
   Activity,
   FileStack,
+  UserPlus,
 } from "lucide-react";
 import apiClient, { apiError } from "../api/client";
 import { useAuth } from "../hooks/useAuth.jsx";
@@ -23,13 +24,14 @@ import {
   PageHeader,
   Alert,
   Input,
+  Select,
   Label,
 } from "../components/ui";
 import { Skeleton } from "../components/ui/Skeleton";
 import { formatDateTime } from "../lib/format";
 
 export default function Profile() {
-  const { user, profileLoading, refreshProfile } = useAuth();
+  const { user, profileLoading, refreshProfile, isAdmin } = useAuth();
 
   // ---- profile form
   const [fullName, setFullName] = useState("");
@@ -50,6 +52,39 @@ export default function Profile() {
 
   // ---- account activity
   const [counts, setCounts] = useState({ documents: 0, predictions: 0 });
+
+  // ---- admin user provisioning form
+  const [newUserName, setNewUserName] = useState("");
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserPassword, setNewUserPassword] = useState("");
+  const [newUserRole, setNewUserRole] = useState("User");
+  const [provisioningUser, setProvisioningUser] = useState(false);
+  const [provisionError, setProvisionError] = useState("");
+  const [provisionStatus, setProvisionStatus] = useState("");
+
+  const handleCreateUser = async (e) => {
+    e.preventDefault();
+    setProvisionError("");
+    setProvisionStatus("");
+    setProvisioningUser(true);
+    try {
+      await apiClient.post("/auth/users", {
+        full_name: newUserName.trim(),
+        email: newUserEmail.trim().toLowerCase(),
+        password: newUserPassword,
+        role_name: newUserRole,
+      });
+      setProvisionStatus(`User account '${newUserEmail.trim().toLowerCase()}' provisioned successfully as ${newUserRole}.`);
+      setNewUserName("");
+      setNewUserEmail("");
+      setNewUserPassword("");
+      setNewUserRole("User");
+    } catch (err) {
+      setProvisionError(apiError(err, "Unable to create user account."));
+    } finally {
+      setProvisioningUser(false);
+    }
+  };
 
   // Seed the form once the profile arrives.
   useEffect(() => {
@@ -446,6 +481,87 @@ export default function Profile() {
                 })}
               </div>
             </Card>
+
+            {isAdmin && (
+              <Card>
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-neon-gradient text-white">
+                    <UserPlus className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-slate-50">
+                      Provision User Account
+                    </h2>
+                    <p className="text-xs text-slate-400">
+                      Create operator or analyst accounts directly as an Admin
+                    </p>
+                  </div>
+                </div>
+
+                <form onSubmit={handleCreateUser} className="space-y-4">
+                  <div>
+                    <Label htmlFor="newUserName">Full Name</Label>
+                    <Input
+                      id="newUserName"
+                      value={newUserName}
+                      onChange={(e) => setNewUserName(e.target.value)}
+                      placeholder="e.g. Alex Morgan"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="newUserEmail">Email Address</Label>
+                    <Input
+                      id="newUserEmail"
+                      type="email"
+                      value={newUserEmail}
+                      onChange={(e) => setNewUserEmail(e.target.value)}
+                      placeholder="operator@deepshield.ai"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="newUserPassword" hint="min 8 characters">
+                      Initial Password
+                    </Label>
+                    <Input
+                      id="newUserPassword"
+                      type="password"
+                      value={newUserPassword}
+                      onChange={(e) => setNewUserPassword(e.target.value)}
+                      placeholder="••••••••"
+                      minLength={8}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="newUserRole">Assigned Role</Label>
+                    <Select
+                      id="newUserRole"
+                      value={newUserRole}
+                      onChange={(e) => setNewUserRole(e.target.value)}
+                    >
+                      <option value="User">User (Standard Operator)</option>
+                      <option value="Analyst">Analyst (Forensic Reviewer)</option>
+                      <option value="Admin">Administrator (Full Privileges)</option>
+                    </Select>
+                  </div>
+
+                  {provisionError && <Alert variant="error">{provisionError}</Alert>}
+                  {provisionStatus && <Alert variant="success">{provisionStatus}</Alert>}
+
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    loading={provisioningUser}
+                    icon={UserPlus}
+                    className="w-full"
+                  >
+                    Provision Account
+                  </Button>
+                </form>
+              </Card>
+            )}
 
             <Alert variant="info" title="Role changes need an administrator">
               Roles cannot be edited here — self-service escalation would defeat

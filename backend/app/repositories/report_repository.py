@@ -54,6 +54,20 @@ class ReportRepository:
             .all()
         )
 
+    def get_reports_by_user(self, user_id: int, skip: int = 0, limit: int = 50):
+        from app.models.document import Document
+        from app.models.prediction import Prediction
+        return (
+            self.db.query(Report)
+            .join(Prediction, Report.prediction_id == Prediction.id)
+            .join(Document, Prediction.document_id == Document.id)
+            .filter(Document.uploaded_by == user_id)
+            .order_by(Report.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+
     def update_report(
         self,
         report: Report

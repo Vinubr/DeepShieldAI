@@ -38,9 +38,10 @@ checkpoints/
 mlruns/
 wandb/
 chroma_db/
-backend/storage/**
-!backend/storage/**/
-!backend/storage/**/.gitkeep
+backend/storage/
+storage/
+backend/data/
+data/
 *.npy
 *.npz
 
@@ -52,8 +53,6 @@ logs/
 *.log
 *.db
 *.sqlite3
-.coverage
-htmlcov/
 
 # ---- Notebooks ----
 .ipynb_checkpoints/

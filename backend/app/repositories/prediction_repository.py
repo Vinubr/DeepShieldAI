@@ -54,6 +54,18 @@ class PredictionRepository:
             .all()
         )
 
+    def get_predictions_by_user(self, user_id: int, skip: int = 0, limit: int = 50):
+        from app.models.document import Document
+        return (
+            self.db.query(Prediction)
+            .join(Document, Prediction.document_id == Document.id)
+            .filter(Document.uploaded_by == user_id)
+            .order_by(Prediction.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+
     def update_prediction(
         self,
         prediction: Prediction

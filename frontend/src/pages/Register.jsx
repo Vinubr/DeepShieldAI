@@ -1,19 +1,22 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Mail, Lock, User, Eye, EyeOff, ShieldCheck, ArrowRight } from "lucide-react";
 import apiClient, { apiError } from "../api/client";
+import { useAuth } from "../hooks/useAuth.jsx";
 import AuthBrandPanel from "../components/AuthBrandPanel";
 import { Button, Alert, Input, Label } from "../components/ui";
 
 export default function Register() {
+  const location = useLocation();
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(location.state?.email ?? "");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const { login } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (event) => {
@@ -24,15 +27,24 @@ export default function Register() {
 
     try {
       await apiClient.post("/auth/register", {
-        full_name: name,
-        email,
+        full_name: name.trim(),
+        email: email.trim().toLowerCase(),
         password,
       });
-      setMessage("Account created. Redirecting to sign in…");
-      setName("");
-      setEmail("");
-      setPassword("");
-      setTimeout(() => navigate("/login"), 1200);
+
+      // Auto sign-in immediately so user never has to re-type credentials
+      try {
+        const loginRes = await apiClient.post("/auth/login", {
+          email: email.trim().toLowerCase(),
+          password,
+        });
+        login(loginRes.data.access_token);
+        navigate("/dashboard", { replace: true });
+        return;
+      } catch {
+        setMessage("Account created successfully. Redirecting to sign in…");
+        setTimeout(() => navigate("/login"), 1200);
+      }
     } catch (err) {
       setError(apiError(err, "Unable to register. Check your details."));
     } finally {
@@ -63,7 +75,19 @@ export default function Register() {
             Accounts are provisioned with the standard User role.
           </p>
 
-          <form className="mt-8 space-y-5" onSubmit={handleSubmit}>
+          <div className="mt-6 flex rounded-xl border border-line/10 bg-void-900/60 p-1">
+            <Link
+              to="/login"
+              className="flex-1 rounded-lg py-2 text-center text-sm font-semibold text-slate-400 transition hover:text-slate-100"
+            >
+              Sign in
+            </Link>
+            <div className="flex-1 rounded-lg bg-volt-500/15 py-2 text-center text-sm font-semibold text-volt-300 border border-volt-500/25">
+              Create account
+            </div>
+          </div>
+
+          <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
             <div>
               <Label htmlFor="name">Full name</Label>
               <Input

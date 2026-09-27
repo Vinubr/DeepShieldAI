@@ -36,6 +36,7 @@ class FileType:
         ".csv",
         ".json",
         ".xml",
+        ".md",
     }
 
     @staticmethod

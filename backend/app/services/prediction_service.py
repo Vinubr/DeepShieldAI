@@ -103,7 +103,39 @@ class PredictionService:
             logger.exception("Inference failed for document %s", document_id)
             raise ValueError(f"Analysis failed: {exc}") from exc
 
-        return self.prediction_repository.update_prediction(prediction)
+        saved_prediction = self.prediction_repository.update_prediction(prediction)
+
+        # Auto-generate baseline forensic diagnostics, bot check, and initial explanation
+        try:
+            from app.repositories.report_repository import ReportRepository
+            from app.services.report_service import ReportService
+            from app.repositories.review_analysis_repository import ReviewAnalysisRepository
+            from app.services.review_analysis_service import ReviewAnalysisService
+            from app.repositories.bot_analysis_repository import BotAnalysisRepository
+            from app.services.bot_analysis_service import BotAnalysisService
+            from app.repositories.explanation_repository import ExplanationRepository
+            from app.services.explanation_service import ExplanationService
+
+            db = self.prediction_repository.db
+            ReportService(ReportRepository(db), self.prediction_repository).generate_report(saved_prediction.id)
+            ReviewAnalysisService(ReviewAnalysisRepository(db), self.prediction_repository).generate_review_analysis(saved_prediction.id)
+            BotAnalysisService(BotAnalysisRepository(db), self.prediction_repository).generate_bot_analysis(saved_prediction.id)
+
+            exp_service = ExplanationService(
+                ExplanationRepository(db),
+                self.prediction_repository,
+            )
+            if document_type in ("Image", "Video", "Audio"):
+                exp_service.generate_explanation(saved_prediction.id, "gradcam")
+                exp_service.generate_explanation(saved_prediction.id, "shap")
+                exp_service.generate_explanation(saved_prediction.id, "lime")
+            elif document_type in ("Text", "Review"):
+                exp_service.generate_explanation(saved_prediction.id, "shap")
+                exp_service.generate_explanation(saved_prediction.id, "lime")
+        except Exception as auto_exc:
+            logger.warning("Post-analysis auto-generation non-fatal error: %s", auto_exc)
+
+        return saved_prediction
 
     def get_prediction_by_id(
         self,
@@ -136,6 +168,12 @@ class PredictionService:
 
         return (
             self.prediction_repository.get_all_predictions(skip, limit)
+        )
+
+    def get_predictions_by_user(self, user_id: int, skip: int = 0, limit: int = 50):
+
+        return (
+            self.prediction_repository.get_predictions_by_user(user_id, skip, limit)
         )
 
     def update_prediction(

@@ -28,17 +28,21 @@ opencv-python-headless>=4.10   # video frame extraction (cv2.VideoCapture)
 # --- review detector (live, reuses transformers/torch above) ---
 # --- bot detector (no model trained yet; see MODELS.md) ---
 
-# --- explainability ---
+# --- explainability (phase 7) ---
 # Grad-CAM (Image) needed no new dependency at all: it's implemented in
 # xai/gradcam.py with plain torch.autograd, not tf-keras-vis (that library
 # is TensorFlow-only, and this project deliberately runs Keras on the
 # PyTorch backend — see requirements note above). SHAP (Text/Review) is
-# the primary external explainer dependencies are:
+# the one real new dependency this phase adds:
 shap>=0.46
-lime>=0.2.0.1
 
-# --- retrieval-augmented knowledge base ---
-chromadb>=1.0
-sentence-transformers>=3.0
-pypdf>=5.0
-python-docx>=1.1
+# LIME — not implemented this phase (scoped out; see PROJECT_STATUS_RECHECK).
+# lime>=0.2.0.1
+# matplotlib>=3.9
+
+# --- retrieval (phase 9) ---
+chromadb>=0.5
+sentence-transformers>=3.1
+pypdf>=5.0             # also the natural home for real PDF text extraction,
+                       # which text_detector.py deliberately does not do yet
+

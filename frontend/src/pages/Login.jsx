@@ -27,7 +27,10 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const response = await apiClient.post("/auth/login", { email, password });
+      const response = await apiClient.post("/auth/login", {
+        email: email.trim().toLowerCase(),
+        password,
+      });
       login(response.data.access_token);
       navigate(from, { replace: true });
     } catch (err) {
@@ -60,7 +63,19 @@ export default function Login() {
             Authenticate to reach the detection console.
           </p>
 
-          <form className="mt-8 space-y-5" onSubmit={handleSubmit}>
+          <div className="mt-6 flex rounded-xl border border-line/10 bg-void-900/60 p-1">
+            <div className="flex-1 rounded-lg bg-neon-gradient py-2 text-center text-sm font-semibold text-white shadow-tile">
+              Sign in
+            </div>
+            <Link
+              to="/register"
+              className="flex-1 rounded-lg py-2 text-center text-sm font-semibold text-slate-400 transition hover:text-slate-100"
+            >
+              Create account
+            </Link>
+          </div>
+
+          <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
             <div>
               <Label htmlFor="email">Email</Label>
               <Input
@@ -105,7 +120,23 @@ export default function Login() {
               </div>
             </div>
 
-            {error && <Alert variant="error">{error}</Alert>}
+            {error && (
+              <Alert variant="error">
+                <div className="space-y-1.5">
+                  <p>{error}</p>
+                  <p className="text-xs text-threat/90">
+                    Want to create a new account?{" "}
+                    <Link
+                      to="/register"
+                      state={{ email }}
+                      className="font-bold underline hover:text-white"
+                    >
+                      Click here to register
+                    </Link>
+                  </p>
+                </div>
+              </Alert>
+            )}
 
             <Button
               type="submit"
@@ -119,12 +150,12 @@ export default function Login() {
           </form>
 
           <p className="mt-8 text-center text-sm text-slate-500">
-            No account yet?{" "}
+            Don&apos;t have an account yet?{" "}
             <Link
               to="/register"
               className="font-semibold text-neon-400 transition hover:text-neon-300"
             >
-              Request access
+              Create an account
             </Link>
           </p>
         </div>

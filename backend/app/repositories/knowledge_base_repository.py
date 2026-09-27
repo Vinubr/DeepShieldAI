@@ -40,6 +40,23 @@ class KnowledgeBaseRepository:
             .all()
         )
 
+    def get_for_user(self, user_id: int | None = None, is_admin: bool = False, skip: int = 0, limit: int = 50):
+        if is_admin or user_id is None:
+            return self.get_all(skip=skip, limit=limit)
+
+        from sqlalchemy import or_
+        from app.models.document import Document
+
+        return (
+            self.db.query(KnowledgeBase)
+            .join(Document, KnowledgeBase.document_id == Document.id)
+            .filter(or_(Document.uploaded_by == user_id, Document.uploaded_by == 1))
+            .order_by(KnowledgeBase.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+
     def get_by_document(
         self,
         document_id: int,

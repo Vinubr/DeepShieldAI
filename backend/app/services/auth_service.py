@@ -44,25 +44,35 @@ class AuthService:
 
         return role
 
-    def register_user(self, user_data: UserCreate):
+    def register_user(self, user_data: UserCreate, role_name: str | None = None):
+        cleaned_email = str(user_data.email).strip().lower()
 
         # Check if email already exists
         existing_user = self.user_repository.get_user_by_email(
-            user_data.email
+            cleaned_email
         )
 
         if existing_user:
             raise ValueError("Email already registered")
 
-        role = self._get_default_role()
+        if role_name:
+            role = (
+                self.db.query(Role)
+                .filter(Role.role_name == role_name)
+                .first()
+            )
+            if role is None:
+                role = self._get_default_role()
+        else:
+            role = self._get_default_role()
 
-        # Create new user — self-registration never grants elevated roles.
-        # Admins are created out-of-band via scripts/create_admin.py.
+        # Create new user
         new_user = User(
-            full_name=user_data.full_name,
-            email=user_data.email,
+            full_name=user_data.full_name.strip(),
+            email=cleaned_email,
             password_hash=hash_password(user_data.password),
-            role_id=role.id
+            role_id=role.id,
+            is_active=True,
         )
 
         return self.user_repository.create_user(new_user)

@@ -14,6 +14,13 @@ class DocumentUpdate(BaseModel):
     document_type_id: Optional[int] = None
 
 
+class DocumentPasteRequest(BaseModel):
+    title: Optional[str] = None
+    text: str
+    category: Optional[str] = "text"
+    description: Optional[str] = None
+
+
 class DocumentResponse(BaseModel):
     id: int
     file_name: str

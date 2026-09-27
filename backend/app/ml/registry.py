@@ -66,6 +66,7 @@ class ModelRegistry:
             num_frames=settings.VIDEO_NUM_FRAMES,
             frame_size=settings.VIDEO_FRAME_SIZE,
             device=settings.INFERENCE_DEVICE,
+            threshold=settings.VIDEO_DECISION_THRESHOLD,
         )
         video.load()
 

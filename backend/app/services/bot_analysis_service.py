@@ -87,9 +87,13 @@ class BotAnalysisService:
             raw_text = ""
             if doc_path and doc_path.exists():
                 try:
-                    raw_text = doc_path.read_text(encoding="utf-8", errors="replace").strip()
+                    from app.ml.text_preprocessing import load_text
+                    raw_text = load_text(str(doc_path)).strip()
                 except Exception:
-                    raw_text = ""
+                    try:
+                        raw_text = doc_path.read_text(encoding="utf-8", errors="replace").strip()
+                    except Exception:
+                        raw_text = ""
 
             words = re.findall(r"\b[A-Za-z0-9'-]+\b", raw_text) if raw_text else []
             total_words = len(words)

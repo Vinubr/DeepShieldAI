@@ -11,6 +11,7 @@ import {
   ArrowUpDown,
   ChevronLeft,
   ChevronRight,
+  ExternalLink,
 } from "lucide-react";
 import apiClient, { apiError } from "../api/client";
 import {
@@ -31,6 +32,7 @@ import {
   formatSeconds,
   fileMeta,
   exportCsv,
+  getDocumentFileUrl,
 } from "../lib/format";
 
 const PAGE_SIZE = 12;
@@ -139,6 +141,19 @@ export default function History() {
   const pageRows = rows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   const handleDelete = async (id) => {
+    const itemType =
+      tab === "predictions"
+        ? "prediction"
+        : tab === "reports"
+          ? "report"
+          : "document";
+    if (
+      !window.confirm(
+        `Are you sure you want to delete this ${itemType}? This action cannot be undone.`
+      )
+    ) {
+      return;
+    }
     const endpoint =
       tab === "predictions"
         ? `/predictions/${id}`
@@ -278,7 +293,6 @@ export default function History() {
                         <>
                           <Th>ID</Th>
                           <Th>Verdict</Th>
-                          <Th>Confidence</Th>
                           <Th>Source file</Th>
                           <Th>Model</Th>
                           <Th>Status</Th>
@@ -328,9 +342,6 @@ export default function History() {
                                 />
                                 {row.predicted_label}
                               </span>
-                            </Td>
-                            <Td className="font-mono text-slate-300">
-                              {(row.confidence_score * 100).toFixed(1)}%
                             </Td>
                             <Td className="max-w-[16rem] truncate text-slate-400">
                               {documentNames.get(row.document_id) ??
@@ -416,10 +427,25 @@ export default function History() {
                             {formatDateTime(row.uploaded_at)}
                           </Td>
                           <Td className="text-right">
-                            <DeleteButton
-                              onClick={() => handleDelete(row.id)}
-                              busy={deleting === row.id}
-                            />
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  window.open(
+                                    getDocumentFileUrl(row.id),
+                                    "_blank"
+                                  )
+                                }
+                                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-void-800 hover:text-neon-400"
+                                title={`Open ${row.original_file_name}`}
+                              >
+                                <ExternalLink className="h-4 w-4" />
+                              </button>
+                              <DeleteButton
+                                onClick={() => handleDelete(row.id)}
+                                busy={deleting === row.id}
+                              />
+                            </div>
                           </Td>
                         </tr>
                       );

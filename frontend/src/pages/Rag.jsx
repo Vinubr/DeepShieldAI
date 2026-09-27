@@ -8,6 +8,9 @@ import {
   RefreshCw,
   Trash2,
   Cpu,
+  Copy,
+  Check,
+  Sparkles,
 } from "lucide-react";
 import apiClient, { apiError } from "../api/client";
 import {
@@ -31,12 +34,24 @@ const EMBEDDING_MODELS = [
   "bge-small-en-v1.5",
 ];
 
+const SUGGESTED_QUERIES = [
+  "Why can a genuine review be flagged as computer-generated?",
+  "How does MobileNetV2 detect GAN & diffusion artifacts in images?",
+  "How does R3D-18 detect deepfake videos through temporal frame analysis?",
+  "How does Wav2Vec2 detect synthetic speech and voice cloning?",
+  "What is the difference between Grad-CAM, SHAP, and LIME in digital forensics?",
+  "What standard operating procedures (SOP) are required for court-admissible evidence?",
+];
+
 export default function Rag() {
   const [entries, setEntries] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [query, setQuery] = useState("");
   const [question, setQuestion] = useState("");
   const [results, setResults] = useState([]);
+  const [answer, setAnswer] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [engineType, setEngineType] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -47,6 +62,8 @@ export default function Rag() {
 
   // Index-entry form
   const [showForm, setShowForm] = useState(false);
+  const [uploadMode, setUploadMode] = useState("direct"); // "direct" or "existing"
+  const [selectedFile, setSelectedFile] = useState(null);
   const [documentId, setDocumentId] = useState("");
   const [embeddingModel, setEmbeddingModel] = useState(EMBEDDING_MODELS[0]);
   const [chunkSize, setChunkSize] = useState(500);
@@ -61,8 +78,17 @@ export default function Rag() {
         apiClient.get("/knowledge-base/"),
         apiClient.get("/documents/", { params: { limit: 100 } }),
       ]);
-      setEntries(entriesRes.data);
-      setDocuments(documentsRes.data);
+      let currentEntries = entriesRes.data || [];
+      // Auto-sync system knowledge sources if empty
+      if (currentEntries.length === 0) {
+        try {
+          await apiClient.post("/knowledge-base/sync");
+          const reSync = await apiClient.get("/knowledge-base/");
+          currentEntries = reSync.data || [];
+        } catch (_) {}
+      }
+      setEntries(currentEntries);
+      setDocuments(documentsRes.data || []);
       setDocumentId((current) => current || String(documentsRes.data[0]?.id ?? ""));
       const vectorStoreRes = await apiClient.get("/knowledge-base/status");
       setVectorStore({ ...vectorStoreRes.data, loading: false });
@@ -113,17 +139,35 @@ export default function Rag() {
 
   const handleCreate = async (event) => {
     event.preventDefault();
-    if (!documentId) {
-      setError("Select a source document.");
-      return;
-    }
 
     setSubmitting(true);
     setError("");
     setStatus("");
 
     try {
-      await apiClient.post(`/knowledge-base/ingest/${documentId}`, null, {
+      let targetDocId = documentId;
+      if (uploadMode === "direct") {
+        if (!selectedFile) {
+          setError("Please select a document file to upload and index.");
+          setSubmitting(false);
+          return;
+        }
+        const formData = new FormData();
+        formData.append("file", selectedFile);
+        formData.append("description", "Directly indexed knowledge source");
+        const uploadRes = await apiClient.post("/documents/upload", formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+        targetDocId = uploadRes.data.id;
+      }
+
+      if (!targetDocId) {
+        setError("Select a source document or upload a new file.");
+        setSubmitting(false);
+        return;
+      }
+
+      await apiClient.post(`/knowledge-base/ingest/${targetDocId}`, null, {
         params: {
           embedding_model: embeddingModel,
           chunk_size: Number(chunkSize),
@@ -131,6 +175,7 @@ export default function Rag() {
       });
       setStatus("Document indexed successfully.");
       setShowForm(false);
+      setSelectedFile(null);
       await load(true);
     } catch (err) {
       setError(apiError(err, "Unable to register this entry."));
@@ -152,24 +197,42 @@ export default function Rag() {
     }
   };
 
-  const handleQuery = async (event) => {
-    event.preventDefault();
-    if (!question.trim()) return;
+  const executeSearch = async (queryText) => {
+    const targetQ = (queryText !== undefined ? queryText : question).trim();
+    if (!targetQ) return;
 
     setSearching(true);
     setError("");
     try {
       const response = await apiClient.post("/knowledge-base/query", {
-        question: question.trim(),
-        top_k: 3,
+        question: targetQ,
+        top_k: 6,
       });
-      setResults(response.data);
+      if (response.data && response.data.answer) {
+        setAnswer(response.data.answer);
+        setResults(response.data.results || []);
+        setEngineType(response.data.engine || "local-extractive");
+      } else if (Array.isArray(response.data)) {
+        setAnswer("");
+        setResults(response.data);
+        setEngineType("raw-chunks");
+      } else {
+        setAnswer("");
+        setResults([]);
+        setEngineType("");
+      }
     } catch (err) {
+      setAnswer("");
       setResults([]);
       setError(apiError(err, "Unable to search the knowledge base."));
     } finally {
       setSearching(false);
     }
+  };
+
+  const handleQuery = async (event) => {
+    event.preventDefault();
+    executeSearch();
   };
 
   return (
@@ -260,26 +323,66 @@ export default function Rag() {
 
         {showForm && (
           <Card glow>
-            <p className="hud-label text-neon-400">Register knowledge entry</p>
+            <div className="flex items-center justify-between">
+              <p className="hud-label text-neon-400">Register knowledge entry</p>
+              <div className="flex rounded-lg border border-line/10 bg-void-950 p-1 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setUploadMode("direct")}
+                  className={`rounded-md px-3 py-1 font-medium transition ${
+                    uploadMode === "direct"
+                      ? "bg-neon-500/20 text-neon-300 shadow-sm"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  Upload & index new file
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUploadMode("existing")}
+                  className={`rounded-md px-3 py-1 font-medium transition ${
+                    uploadMode === "existing"
+                      ? "bg-neon-500/20 text-neon-300 shadow-sm"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  From uploaded documents
+                </button>
+              </div>
+            </div>
+
             <form
               onSubmit={handleCreate}
               className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4"
             >
-              <div>
-                <Label htmlFor="document">Source document</Label>
-                <Select
-                  id="document"
-                  value={documentId}
-                  onChange={(event) => setDocumentId(event.target.value)}
-                >
-                  {documents.length === 0 && <option value="">No documents</option>}
-                  {documents.map((document) => (
-                    <option key={document.id} value={document.id}>
-                      #{document.id} · {document.original_file_name}
-                    </option>
-                  ))}
-                </Select>
-              </div>
+              {uploadMode === "direct" ? (
+                <div>
+                  <Label htmlFor="direct-file">Document file (.txt, .pdf, .md, .docx)</Label>
+                  <input
+                    id="direct-file"
+                    type="file"
+                    accept=".txt,.pdf,.md,.doc,.docx,.csv,.json"
+                    onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                    className="mt-1 block w-full rounded-xl border border-line/20 bg-void-900/80 px-3 py-2 text-xs text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-volt-500/20 file:px-2.5 file:py-1 file:text-xs file:font-semibold file:text-volt-300 hover:file:bg-volt-500/30"
+                  />
+                </div>
+              ) : (
+                <div>
+                  <Label htmlFor="document">Source document</Label>
+                  <Select
+                    id="document"
+                    value={documentId}
+                    onChange={(event) => setDocumentId(event.target.value)}
+                  >
+                    {documents.length === 0 && <option value="">No documents</option>}
+                    {documents.map((document) => (
+                      <option key={document.id} value={document.id}>
+                        #{document.id} · {document.original_file_name}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              )}
 
               <div>
                 <Label htmlFor="model">Embedding model</Label>
@@ -308,13 +411,14 @@ export default function Rag() {
                 />
               </div>
 
-              <div className="md:col-span-2 xl:col-span-4">
+              <div className="flex items-end md:col-span-2 xl:col-span-1">
                 <Button
                   type="submit"
                   loading={submitting}
-                  disabled={documents.length === 0}
+                  disabled={uploadMode === "direct" ? !selectedFile : documents.length === 0}
+                  className="w-full"
                 >
-                  Register entry
+                  {uploadMode === "direct" ? "Upload & Index" : "Register entry"}
                 </Button>
               </div>
             </form>
@@ -335,15 +439,74 @@ export default function Rag() {
                   type="search"
                   value={question}
                   onChange={(event) => setQuestion(event.target.value)}
-                  placeholder="e.g. Why can a real image be classified as deepfake?"
+                  placeholder="e.g. How does MobileNetV2 detect deepfakes or why do GANs leave frequency artifacts?"
                 />
                 <Button type="submit" loading={searching} disabled={!question.trim()}>
                   Ask
                 </Button>
               </form>
+              <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                <span className="hud-label text-[0.65rem] text-slate-500 mr-1">Suggested inquiries:</span>
+                {SUGGESTED_QUERIES.map((sq, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      setQuestion(sq);
+                      executeSearch(sq);
+                    }}
+                    className="rounded-lg border border-line/10 bg-void-900/60 px-2.5 py-1 text-[0.72rem] text-slate-300 hover:border-neon-500/40 hover:bg-neon-500/10 hover:text-neon-300 transition"
+                  >
+                    {sq}
+                  </button>
+                ))}
+              </div>
             </div>
-            <Badge tone="success">ChromaDB retrieval</Badge>
+            <div className="flex flex-wrap items-center gap-2">
+              {vectorStore?.grok_enabled ? (
+                <Badge tone="primary" className="bg-cyan-500/20 text-cyan-300 border-cyan-500/30">
+                  Grok LLM Active ({vectorStore.llm_model || "grok-2"})
+                </Badge>
+              ) : (
+                <Badge tone="neutral">Local ChromaDB Engine</Badge>
+              )}
+              <Badge tone="success">ChromaDB semantic retrieval</Badge>
+            </div>
           </div>
+
+          {answer && (
+            <div className="mt-5 rounded-xl border border-neon-500/30 bg-void-900/90 p-5 shadow-lg shadow-neon-500/5 animate-in fade-in duration-300">
+              <div className="flex items-center justify-between mb-3 border-b border-line/10 pb-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone="success">Grounded Forensic Synthesis</Badge>
+                  {engineType === "grok-llm" ? (
+                    <Badge tone="primary" className="bg-cyan-500/20 text-cyan-300 border-cyan-500/30">
+                      Powered by xAI Grok
+                    </Badge>
+                  ) : (
+                    <Badge tone="neutral">DeepShield Local Engine</Badge>
+                  )}
+                  <span className="text-xs text-slate-400">Strictly verified against indexed knowledge sources</span>
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={copied ? Check : Copy}
+                  onClick={() => {
+                    navigator.clipboard?.writeText(answer);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  }}
+                  className="text-xs"
+                >
+                  {copied ? "Copied" : "Copy"}
+                </Button>
+              </div>
+              <div className="whitespace-pre-line text-sm text-slate-200 leading-relaxed font-sans bg-void-950/70 p-4 rounded-lg border border-line/20 font-mono text-[0.84rem]">
+                {answer}
+              </div>
+            </div>
+          )}
 
           {results.length > 0 && (
             <div className="mt-5 space-y-3">

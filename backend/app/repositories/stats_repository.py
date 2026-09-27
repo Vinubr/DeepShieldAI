@@ -24,75 +24,98 @@ class StatsRepository:
         self.db = db
 
     # ------------------------------------------------------------- totals
-    def count_predictions(self) -> int:
-        return self.db.query(func.count(Prediction.id)).scalar() or 0
+    def count_predictions(self, user_id: int | None = None) -> int:
+        q = self.db.query(func.count(Prediction.id))
+        if user_id is not None:
+            q = q.join(Document, Prediction.document_id == Document.id).filter(Document.uploaded_by == user_id)
+        return q.scalar() or 0
 
-    def count_documents(self) -> int:
-        return self.db.query(func.count(Document.id)).scalar() or 0
+    def count_documents(self, user_id: int | None = None) -> int:
+        q = self.db.query(func.count(Document.id))
+        if user_id is not None:
+            q = q.filter(Document.uploaded_by == user_id)
+        return q.scalar() or 0
 
-    def count_reports(self) -> int:
-        return self.db.query(func.count(Report.id)).scalar() or 0
+    def count_reports(self, user_id: int | None = None) -> int:
+        q = self.db.query(func.count(Report.id))
+        if user_id is not None:
+            q = q.join(Prediction, Report.prediction_id == Prediction.id).join(Document, Prediction.document_id == Document.id).filter(Document.uploaded_by == user_id)
+        return q.scalar() or 0
 
-    def count_knowledge_entries(self) -> int:
-        return self.db.query(func.count(KnowledgeBase.id)).scalar() or 0
+    def count_knowledge_entries(self, user_id: int | None = None) -> int:
+        q = self.db.query(func.count(KnowledgeBase.id))
+        if user_id is not None:
+            q = q.join(Document, KnowledgeBase.document_id == Document.id).filter((Document.uploaded_by == user_id) | (Document.uploaded_by == 1))
+        return q.scalar() or 0
 
     # ------------------------------------------------------------ averages
-    def average_confidence(self) -> float | None:
-        value = self.db.query(func.avg(Prediction.confidence_score)).scalar()
+    def average_confidence(self, user_id: int | None = None) -> float | None:
+        q = self.db.query(func.avg(Prediction.confidence_score))
+        if user_id is not None:
+            q = q.join(Document, Prediction.document_id == Document.id).filter(Document.uploaded_by == user_id)
+        value = q.scalar()
         return float(value) if value is not None else None
 
-    def average_processing_time(self) -> float | None:
-        value = self.db.query(func.avg(Prediction.processing_time)).scalar()
+    def average_processing_time(self, user_id: int | None = None) -> float | None:
+        q = self.db.query(func.avg(Prediction.processing_time))
+        if user_id is not None:
+            q = q.join(Document, Prediction.document_id == Document.id).filter(Document.uploaded_by == user_id)
+        value = q.scalar()
         return float(value) if value is not None else None
 
     # ---------------------------------------------------------- breakdowns
-    def _grouped_count(self, column) -> list[tuple[str, int]]:
+    def _grouped_count(self, column, user_id: int | None = None) -> list[tuple[str, int]]:
         """GROUP BY <column> ORDER BY count DESC — the shape every card wants."""
+        q = self.db.query(column, func.count().label("count"))
+        if user_id is not None:
+            q = q.join(Document, Prediction.document_id == Document.id).filter(Document.uploaded_by == user_id)
         rows = (
-            self.db.query(column, func.count().label("count"))
-            .group_by(column)
+            q.group_by(column)
             .order_by(func.count().desc())
             .all()
         )
         return [(str(name), int(count)) for name, count in rows]
 
-    def label_breakdown(self) -> list[tuple[str, int]]:
-        return self._grouped_count(Prediction.predicted_label)
+    def label_breakdown(self, user_id: int | None = None) -> list[tuple[str, int]]:
+        return self._grouped_count(Prediction.predicted_label, user_id=user_id)
 
-    def status_breakdown(self) -> list[tuple[str, int]]:
-        return self._grouped_count(Prediction.processing_status)
+    def status_breakdown(self, user_id: int | None = None) -> list[tuple[str, int]]:
+        return self._grouped_count(Prediction.processing_status, user_id=user_id)
 
-    def model_breakdown(self) -> list[tuple[str, int]]:
-        return self._grouped_count(Prediction.model_name)
+    def model_breakdown(self, user_id: int | None = None) -> list[tuple[str, int]]:
+        return self._grouped_count(Prediction.model_name, user_id=user_id)
 
-    def document_type_breakdown(self) -> list[tuple[str, int]]:
-        rows = (
+    def document_type_breakdown(self, user_id: int | None = None) -> list[tuple[str, int]]:
+        q = (
             self.db.query(
                 DocumentType.type_name,
                 func.count(Document.id).label("count"),
             )
             .join(Document, Document.document_type_id == DocumentType.id)
-            .group_by(DocumentType.type_name)
+        )
+        if user_id is not None:
+            q = q.filter(Document.uploaded_by == user_id)
+        rows = (
+            q.group_by(DocumentType.type_name)
             .order_by(func.count(Document.id).desc())
             .all()
         )
         return [(str(name), int(count)) for name, count in rows]
 
     # ------------------------------------------------------------ time series
-    def daily_counts(self, days: int = 14) -> list[tuple[str, int]]:
+    def daily_counts(self, days: int = 14, user_id: int | None = None) -> list[tuple[str, int]]:
         """
         Predictions per calendar day over the trailing window.
-
-        `func.date(...)` is used rather than a Postgres-only `date_trunc` so
-        the same query runs under SQLite in the test suite (Phase 12).
         """
         since = datetime.now(UTC) - timedelta(days=days)
         day = func.date(Prediction.created_at)
 
+        q = self.db.query(day.label("day"), func.count().label("count")).filter(Prediction.created_at >= since)
+        if user_id is not None:
+            q = q.join(Document, Prediction.document_id == Document.id).filter(Document.uploaded_by == user_id)
+
         rows = (
-            self.db.query(day.label("day"), func.count().label("count"))
-            .filter(Prediction.created_at >= since)
-            .group_by(day)
+            q.group_by(day)
             .order_by(day)
             .all()
         )

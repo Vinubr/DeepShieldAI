@@ -136,25 +136,51 @@ class AudioDetector(BaseDetector):
 
         started = time.perf_counter()
 
-        waveform = preprocess_file(
-            file_path,
-            sample_rate=self.sample_rate,
-            num_samples=self.num_samples,
-        )
+        from app.ml.audio_preprocessing import load_audio, fix_length
+        full_waveform = load_audio(file_path, sample_rate=self.sample_rate)
+        total_len = len(full_waveform)
 
-        inputs = self._feature_extractor(
-            waveform,
-            sampling_rate=self.sample_rate,
-            return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-            max_length=self.num_samples,
-        )
-        inputs = {key: value.to(self.device) for key, value in inputs.items()}
+        if total_len <= self.num_samples:
+            waveform = fix_length(full_waveform, num_samples=self.num_samples)
+            inputs = self._feature_extractor(
+                waveform,
+                sampling_rate=self.sample_rate,
+                return_tensors="pt",
+                padding="max_length",
+                truncation=True,
+                max_length=self.num_samples,
+            )
+            inputs = {key: value.to(self.device) for key, value in inputs.items()}
 
-        with torch.no_grad():
-            logits = self._model(**inputs).logits
-            probs = torch.softmax(logits, dim=-1)[0]
+            with torch.no_grad():
+                logits = self._model(**inputs).logits
+                probs = torch.softmax(logits, dim=-1)[0]
+        else:
+            # Multi-segment temporal evaluation: sample start, middle, and end segments
+            offsets = [
+                0,
+                max(0, (total_len - self.num_samples) // 2),
+                max(0, total_len - self.num_samples),
+            ]
+            unique_offsets = sorted(set(offsets))
+            windows = [
+                fix_length(full_waveform[off : off + self.num_samples], num_samples=self.num_samples)
+                for off in unique_offsets
+            ]
+            inputs = self._feature_extractor(
+                windows,
+                sampling_rate=self.sample_rate,
+                return_tensors="pt",
+                padding="max_length",
+                truncation=True,
+                max_length=self.num_samples,
+            )
+            inputs = {key: value.to(self.device) for key, value in inputs.items()}
+
+            with torch.no_grad():
+                all_logits = self._model(**inputs).logits
+                all_probs = torch.softmax(all_logits, dim=-1)
+                probs = torch.mean(all_probs, dim=0)
 
         predicted_id = int(torch.argmax(probs).item())
         label = self._id2label.get(predicted_id, str(predicted_id))

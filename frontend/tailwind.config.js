@@ -20,6 +20,7 @@ export default {
         // *resolve to* changed, via the CSS vars index.css defines per theme.
         void: {
           DEFAULT: "rgb(var(--void-900) / <alpha-value>)",
+          950: "rgb(18 18 18 / <alpha-value>)", // deep dark surface
           900: "rgb(var(--void-900) / <alpha-value>)", // page background
           800: "rgb(var(--void-800) / <alpha-value>)", // sidebar / navbar
           700: "rgb(var(--void-700) / <alpha-value>)", // card / panel / input

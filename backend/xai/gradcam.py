@@ -138,3 +138,174 @@ def generate(
             "peak_activation": peak,
         },
     }
+
+
+def generate_video(
+    detector,
+    file_path: str,
+    alpha: float = 0.45,
+) -> dict:
+    """
+    Run 3D Spatio-Temporal Grad-CAM for the Video detector (R3D-18).
+    Hooks layer4 (last 3D conv block), computes gradients, finds keyframe with
+    highest spatial activation, and blends a Grad-CAM heatmap over that keyframe.
+    """
+    import cv2
+    from app.ml.video_preprocessing import MEAN, STD, extract_frames
+
+    frames = extract_frames(
+        file_path,
+        num_frames=detector.num_frames,
+        frame_size=detector.frame_size,
+    )
+    # Unnormalize to original uint8 RGB for visualization
+    unnorm = np.clip((frames * STD + MEAN) * 255.0, 0, 255).astype(np.uint8)
+
+    tensor = (
+        torch.from_numpy(frames)
+        .permute(3, 0, 1, 2)
+        .unsqueeze(0)
+        .to(detector.device)
+    )
+    tensor.requires_grad = True
+
+    features = None
+
+    def hook_fn(module, inp, out):
+        nonlocal features
+        features = out
+
+    handle = detector._model.layer4.register_forward_hook(hook_fn)
+    output = detector._model(tensor)
+    handle.remove()
+
+    pred_idx = output.argmax(dim=-1).item()
+    score = output[0, pred_idx]
+    grads_tuple = torch.autograd.grad(score, features, retain_graph=False, allow_unused=True)
+    grads = grads_tuple[0] if grads_tuple[0] is not None else torch.ones_like(features)
+
+    # features and grads shape: (1, C, T', H', W')
+    weights = grads.mean(dim=(3, 4), keepdim=True)
+    cam = torch.relu((weights * features).sum(dim=1))[0]  # (T', H', W')
+    cam_np = cam.detach().cpu().numpy()
+
+    # Find keyframe with highest spatial activation
+    t_max = int(np.argmax(cam_np.mean(axis=(1, 2))))
+    orig_idx = min(
+        detector.num_frames - 1,
+        max(0, int(round(t_max * (detector.num_frames / cam_np.shape[0])))),
+    )
+    frame_img = Image.fromarray(unnorm[orig_idx])
+    heatmap_2d = cv2.resize(cam_np[t_max], (detector.frame_size, detector.frame_size))
+    peak = float(heatmap_2d.max())
+    if peak > 0:
+        heatmap_2d = heatmap_2d / peak
+
+    colored = _apply_colormap(np.uint8(255 * heatmap_2d))
+    overlay = Image.blend(frame_img, colored, alpha=alpha)
+
+    buffer = io.BytesIO()
+    overlay.save(buffer, format="PNG")
+    artifact = base64.b64encode(buffer.getvalue()).decode("ascii")
+
+    class_name = (
+        detector._class_names[pred_idx]
+        if hasattr(detector, "_class_names") and pred_idx < len(detector._class_names)
+        else str(pred_idx)
+    )
+
+    return {
+        "method": "gradcam",
+        "artifact_type": "image",
+        "artifact": artifact,
+        "metadata": {
+            "keyframe_index": orig_idx,
+            "total_frames": detector.num_frames,
+            "peak_activation": peak,
+            "predicted_class": class_name,
+        },
+    }
+
+
+def generate_audio(
+    detector,
+    file_path: str,
+    num_segments: int = 20,
+) -> dict:
+    """
+    Run 1D Temporal Grad-CAM for Audio detector (Wav2Vec2).
+    Hooks the final 1D conv layer in the feature extractor, derives temporal
+    gradients, and pools them into temporal segments across the audio clip.
+    """
+    from app.ml.audio_preprocessing import preprocess_file
+
+    waveform = preprocess_file(
+        file_path,
+        sample_rate=detector.sample_rate,
+        num_samples=detector.num_samples,
+    )
+    waveform = np.asarray(waveform, dtype=np.float32)
+
+    model = detector._model
+    device = detector.device
+
+    last_conv = model.wav2vec2.feature_extractor.conv_layers[-1]
+    features = None
+
+    def hook_fn(module, inp, out):
+        nonlocal features
+        features = out
+
+    handle = last_conv.register_forward_hook(hook_fn)
+    inputs = torch.tensor(waveform).unsqueeze(0).to(device)
+    logits = model(inputs).logits
+    handle.remove()
+
+    pred_idx = logits.argmax(dim=-1).item()
+    score = logits[0, pred_idx]
+    grads = torch.autograd.grad(score, features, retain_graph=False)[0]
+
+    # features shape: (1, channels, T_feat)
+    weights = grads.mean(dim=-1, keepdim=True)
+    cam = torch.relu((weights * features).sum(dim=1))[0]  # (T_feat,)
+    cam_np = cam.detach().cpu().numpy()
+
+    t_len = len(cam_np)
+    seg_size = max(1, t_len // num_segments)
+    duration = detector.num_samples / detector.sample_rate
+    seg_dur = duration / num_segments
+
+    segments = []
+    for i in range(num_segments):
+        start_idx = i * seg_size
+        end_idx = min(t_len, (i + 1) * seg_size) if i < num_segments - 1 else t_len
+        weight = float(cam_np[start_idx:end_idx].mean()) if end_idx > start_idx else 0.0
+        segments.append(
+            {
+                "start": round(i * seg_dur, 2),
+                "end": round((i + 1) * seg_dur, 2),
+                "weight": round(weight, 6),
+            }
+        )
+
+    max_w = max(1e-6, max(s["weight"] for s in segments))
+    for s in segments:
+        s["weight"] = round(s["weight"] / max_w, 4)
+
+    label_str = (
+        detector._id2label.get(pred_idx, str(pred_idx))
+        if hasattr(detector, "_id2label")
+        else str(pred_idx)
+    )
+
+    return {
+        "method": "gradcam",
+        "artifact_type": "audio_segments",
+        "artifact": segments,
+        "metadata": {
+            "num_segments": num_segments,
+            "duration": duration,
+            "predicted_label": label_str,
+        },
+    }
+
